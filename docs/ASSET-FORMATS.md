@@ -67,9 +67,23 @@ Method table (12-byte entries `{IMP, name_ptr, types_ptr}` at `.data` ~`0xcfd5d0
   **cipher-core functions** `0x650090`, `0x650570`, `0x65085c` (called from
   `DataWithContentsOfFile:Password:`), keyed by the Password. Full static reverse = reversing those.
 - **PIC model** (why flat xref failed): globals are reached as `ldr rX,[pc,#imm]` (a *PC-relative
-  displacement*, often negative) then `add rX, pc, rX`; selectors dispatch through a stub at
+  displacement*) then `add rX, pc, rX`, often `add r0, GOTbase, r0` (a 2nd const-offset register);
+  selectors are interned via `sel_getUid`-like **`0x37295c`** then dispatched through
   **`0x3783d4`** (the `objc_msgSend` equivalent). No named `objc_msgSend`/`objc_getClass` export
   (Apportable inlines/renames); `sel_registerName` @ `0x3775e0` IS exported.
+- **The cipher is a 3-call stream API** (recovered from `DataWithContentsOfFile:Password:` @ `0x64ea98`):
+  ```
+  ctx = stack buffer (~0x1080, from `sub sp,#0x4c` + `sub sp,#0x1000`)
+  0x650090(ctx)                 ; cipher_init
+  0x650570(ctx, password)       ; cipher_setkey   (r1 = the Password NSString/bytes)
+  0x65085c(ctx, data+8, len-8)  ; cipher_process  (decrypts in place; skips the 8-byte magic)
+  ```
+  `DataDecryptedFromData:` also applies the nibble-swap pass. **If `0x650090/0x650570/0x65085c` are
+  msgSend-free leaves, call them directly** in unidbg (`module.callFunction`, the proven getter
+  pattern) with a malloc'd ctx + the level body + the key — no ObjC dispatch needed. The one missing
+  input is the **password value** (the constant the caller passes); recover it by resolving the no-pw
+  method's PIC load statically, or by getting unidbg's `objc_msgSend` to dispatch (try forcing
+  init / `__objc_exec_class`) and hooking `0x650570`'s `r1`.
 
 ### Next steps — two routes (Phase-2 blocker)
 
