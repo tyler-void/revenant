@@ -88,34 +88,44 @@ public class LevelDecrypt {
             }
         });
 
-        VM vm = emulator.createDalvikVM();
-        vm.setVerbose(false);
-        DalvikModule dm = vm.loadLibrary(so, true); // forceCallInit=true -> runs init_array / __objc_exec_class (registers ObjC classes)
-        Module module = dm.getModule();
-        long base = module.base;
         final Backend backend = emulator.getBackend();
-        log("loaded base=0x"+Long.toHexString(base));
-
-        MOD = module;
-        final long dwfpw=(base+DWF_PW)&0xffffffffL, dec=(base+DEC_PW)&0xffffffffL;
-        final long setkey=(base+SETKEY)&0xffffffffL, process=(base+PROCESS)&0xffffffffL;
+        // Install hooks at the EXPECTED load base BEFORE init runs, so the game's OWN
+        // startup config-decryption is captured (reveals the real key) — we missed it before.
+        final long EB = 0x40000000L;
+        final long dwfpw=(EB+DWF_PW)&0xffffffffL, dec=(EB+DEC_PW)&0xffffffffL;
+        final long setkey=(EB+SETKEY)&0xffffffffL, process=(EB+PROCESS)&0xffffffffL;
         CodeHook hook = new CodeHook(){
             public void hook(Backend b, long address, int size, Object u){
                 long r0=b.reg_read(ArmConst.UC_ARM_REG_R0).intValue()&0xffffffffL;
                 long r1=b.reg_read(ArmConst.UC_ARM_REG_R1).intValue()&0xffffffffL;
                 long r2=b.reg_read(ArmConst.UC_ARM_REG_R2).intValue()&0xffffffffL;
                 long r3=b.reg_read(ArmConst.UC_ARM_REG_R3).intValue()&0xffffffffL;
-                if(address==dwfpw) log("  >> 0x64ea98 decrypt  r2(data)=0x"+Long.toHexString(r2)+" r3(pw)=0x"+Long.toHexString(r3));
+                if(address==dwfpw) log("  >> decrypt(0x64ea98) data=0x"+Long.toHexString(r2)+" pw=0x"+Long.toHexString(r3));
+                else if(address==dec) log("  >> DataDecryptedFromData(0x64e93c) data=0x"+Long.toHexString(r2)+" pw=0x"+Long.toHexString(r3));
                 else if(address==setkey){
-                    log("  >> cipher_setkey(ctx=0x"+Long.toHexString(r0)+", key=0x"+Long.toHexString(r1)+")");
-                    if(r1!=0){ try{ log("       key[+4]->\""+cstr(rd32(r1+4)&0xffffffffL,48)+"\"  raw=\""+cstr(r1,32)+"\""); }catch(Throwable t){} }
+                    log("  >> cipher_setkey ctx=0x"+Long.toHexString(r0)+" key=0x"+Long.toHexString(r1));
+                    if(r1!=0){ try{
+                        log("       raw[key]=\""+cstr(r1,40)+"\"");
+                        for(int off: new int[]{0,4,8,12,16}){ long p=rd32(r1+off)&0xffffffffL; if(p>0x1000){ String s=cstr(p,48); if(s.length()>=3) log("       [key+"+off+"]->0x"+Long.toHexString(p)+" = \""+s+"\""); } }
+                    }catch(Throwable t){} }
                 }
-                else if(address==process) log("  >> cipher_process(ctx=0x"+Long.toHexString(r0)+", data=0x"+Long.toHexString(r1)+", len="+r2+")");
+                else if(address==process) log("  >> cipher_process ctx=0x"+Long.toHexString(r0)+" data=0x"+Long.toHexString(r1)+" len="+r2);
             }
             public void onAttach(UnHook h){}
             public void detach(){}
         };
         for(long a: new long[]{dwfpw,dec,setkey,process}) backend.hook_add_new(hook, a, a+4, null);
+
+        VM vm = emulator.createDalvikVM();
+        vm.setVerbose(false);
+        log("=== loadLibrary(forceCallInit=true) — watching for STARTUP decryption ===");
+        DalvikModule dm = vm.loadLibrary(so, true);
+        Module module = dm.getModule();
+        long base = module.base;
+        log("loaded base=0x"+Long.toHexString(base)+(base!=EB?"  !! base != 0x40000000, hooks misplaced":""));
+        MOD = module;
+        try { log("=== calling JNI_OnLoad (may trigger native init/config decrypt) ==="); dm.callJNI_OnLoad(emulator); log("JNI_OnLoad returned"); }
+        catch(Throwable t){ log("JNI_OnLoad: "+t); }
 
         NSCONST_ISA = rd32(base+NSCONST_SRC);
         long clsNSData = module.callFunction(emulator, GETCLASS, (int)cstrAlloc("NSData")).longValue()&0xffffffffL;
