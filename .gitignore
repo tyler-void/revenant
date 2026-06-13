@@ -38,6 +38,7 @@ build/keystore/
 tools/unidbg/target/
 tools/unidbg/natives/
 *.class
+__pycache__/
 
 # ── local junk ───────────────────────────────────────────────────────────
 Screenshot_*.jpg

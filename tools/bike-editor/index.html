@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>🏍️ Revenant Bike Editor</title>
+<style>
+  :root{
+    --bg:#1e1e2e; --mantle:#181825; --crust:#11111b; --surface:#313244;
+    --text:#cdd6f4; --sub:#a6adc8; --blue:#89b4fa; --green:#a6e3a1;
+    --peach:#fab387; --mauve:#cba6f7; --red:#f38ba8;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 ui-monospace,'JetBrains Mono',Menlo,monospace;background:var(--bg);color:var(--text)}
+  header{padding:16px 20px;background:var(--crust);border-bottom:1px solid var(--surface)}
+  header h1{margin:0;font-size:18px}
+  header .sub{color:var(--sub);font-size:12px}
+  .wrap{display:flex;height:calc(100vh - 64px)}
+  .list{width:230px;overflow:auto;background:var(--mantle);border-right:1px solid var(--surface);padding:8px}
+  .list button{display:block;width:100%;text-align:left;background:transparent;color:var(--text);
+    border:1px solid transparent;border-radius:8px;padding:8px 10px;margin:2px 0;cursor:pointer;font:inherit}
+  .list button:hover{background:var(--surface)}
+  .list button.active{background:var(--surface);border-color:var(--blue);color:var(--blue)}
+  .panel{flex:1;overflow:auto;padding:20px}
+  .panel h2{margin:0 0 4px;color:var(--peach)}
+  .knob{margin:14px 0;max-width:560px}
+  .knob label{display:flex;justify-content:space-between;color:var(--sub)}
+  .knob label b{color:var(--text)}
+  .knob input[type=range]{width:100%;accent-color:var(--mauve)}
+  .knob .val{color:var(--green);font-variant-numeric:tabular-nums}
+  .bar{margin-top:18px;display:flex;gap:10px;align-items:center}
+  button.save{background:var(--green);color:#11111b;border:0;border-radius:8px;padding:10px 18px;font:inherit;font-weight:700;cursor:pointer}
+  button.save:disabled{opacity:.5;cursor:default}
+  .note{color:var(--sub);font-size:12px}
+  .ok{color:var(--green)} .err{color:var(--red)}
+  .hint{margin-top:24px;padding:12px;border:1px solid var(--surface);border-radius:8px;color:var(--sub);font-size:12px;max-width:560px}
+  code{color:var(--peach)}
+</style>
+</head>
+<body>
+<header>
+  <h1>🏍️ Revenant — Bike Editor</h1>
+  <div class="sub">edit bike physics in <code>build/work/assets/unpack/&lt;Bike&gt;Pref.plist</code> · then run <code>build/build.sh</code></div>
+</header>
+<div class="wrap">
+  <div class="list" id="list"></div>
+  <div class="panel" id="panel"><p class="note">Loading bikes…</p></div>
+</div>
+<script>
+let KNOBS={}, BIKES=[], cur=null, dirty={};
+const $=s=>document.querySelector(s);
+
+async function load(){
+  const r=await fetch('/api/bikes'); const d=await r.json();
+  KNOBS=d.knobs; BIKES=d.bikes;
+  const list=$('#list'); list.innerHTML='';
+  BIKES.forEach(b=>{
+    const btn=document.createElement('button');
+    btn.textContent=b.name; btn.onclick=()=>select(b.name,btn);
+    list.appendChild(btn);
+  });
+  if(BIKES.length) list.firstChild.click();
+}
+function select(name,btn){
+  document.querySelectorAll('.list button').forEach(b=>b.classList.remove('active'));
+  if(btn) btn.classList.add('active');
+  cur=BIKES.find(b=>b.name===name); dirty={};
+  render();
+}
+function render(){
+  const p=$('#panel');
+  if(cur.error){p.innerHTML='<p class="err">'+cur.error+'</p>';return;}
+  let h='<h2>'+cur.name+'</h2><div class="note">'+Object.keys(cur.props).length+' tunable knobs</div>';
+  for(const k in KNOBS){
+    if(!(k in cur.props)) continue;
+    const [mn,mx]=KNOBS[k]; const v=cur.props[k];
+    const step=(mx-mn)/200;
+    h+=`<div class="knob"><label><b>${k}</b><span class="val" id="v_${k}">${(+v).toFixed(3)}</span></label>
+        <input type="range" min="${mn}" max="${mx}" step="${step}" value="${v}"
+          oninput="tweak('${k}',this.value)"></div>`;
+  }
+  h+=`<div class="bar"><button class="save" id="save" onclick="save()" disabled>Save</button>
+      <span class="note" id="status"></span></div>`;
+  h+=`<div class="hint">⚠️ Writes re-encode the bplist. The data round-trips exactly, but
+      <b>device-verify your first edited build</b> (cocos2d parser acceptance). New bikes via
+      <code>bikeedit.py clone</code> still need roster registration — see <code>docs/ROADMAP.md</code>.</div>`;
+  p.innerHTML=h;
+}
+function tweak(k,v){
+  cur.props[k]=+v; dirty[k]=+v;
+  $('#v_'+k).textContent=(+v).toFixed(3);
+  $('#save').disabled=false; $('#status').textContent='';
+}
+async function save(){
+  const st=$('#status'); st.textContent='saving…'; st.className='note';
+  const r=await fetch('/api/bike/'+encodeURIComponent(cur.name),
+    {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(dirty)});
+  const d=await r.json();
+  if(d.ok){ st.textContent='✓ saved — '+d.hint; st.className='ok'; dirty={}; $('#save').disabled=true; }
+  else { st.textContent='✗ '+d.error; st.className='err'; }
+}
+load();
+</script>
+</body>
+</html>
