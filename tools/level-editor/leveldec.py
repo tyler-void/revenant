@@ -87,6 +87,44 @@ def atlas_texture_path(name):
     p = os.path.join(UNPACK, name)
     return p if os.path.exists(p) else None
 
+# The game's atlas textures are a NON-STANDARD WebP (12-byte VP8X w/ 4-byte dims;
+# lossless ALPH that no stock libwebp — ffmpeg/IM/Pillow — will decode). But the
+# VP8 (RGB) chunk is standard, and transparent regions are encoded as pure black.
+# So: extract the VP8 chunk → decode RGB via ffmpeg → chroma-key black to alpha →
+# a normal RGBA PNG the browser can draw. Cached locally (© art → gitignored).
+TEXCACHE = os.path.join(HERE, "textures")
+
+def _vp8_only_webp(raw):
+    off = 12
+    while off + 8 <= len(raw):
+        cc = raw[off:off + 4]; sz = struct.unpack("<I", raw[off + 4:off + 8])[0]
+        if cc in (b"VP8 ", b"VP8L"):
+            body = raw[off + 8:off + 8 + sz]
+            chunk = cc + struct.pack("<I", len(body)) + body + (b"\x00" if len(body) & 1 else b"")
+            return b"RIFF" + struct.pack("<I", len(b"WEBP" + chunk)) + b"WEBP" + chunk
+        off += 8 + sz + (sz & 1)
+    return None
+
+def transcode_atlas(name):
+    """Game WebP atlas → browser-drawable RGBA PNG (cached). Returns path or None."""
+    src = atlas_texture_path(name)
+    if not src:
+        return None
+    os.makedirs(TEXCACHE, exist_ok=True)
+    out = os.path.join(TEXCACHE, os.path.basename(name))   # keep the .png name
+    if os.path.exists(out) and os.path.getsize(out) > 0 and os.path.getmtime(out) >= os.path.getmtime(src):
+        return out
+    vp8 = _vp8_only_webp(open(src, "rb").read())
+    if not vp8:
+        return None
+    tmp = os.path.join("/tmp", "rv_vp8_" + os.path.basename(name) + ".webp")
+    with open(tmp, "wb") as f:
+        f.write(vp8)
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", tmp,
+                    "-vf", "colorkey=0x000000:0.10:0.02", out],
+                   capture_output=True)
+    return out if os.path.exists(out) and os.path.getsize(out) > 0 else None
+
 # ── plist ↔ JSON (display) ──────────────────────────────────────────────────
 # JSON can't tell int 27 from real 27.0, and the game's plist parser cares. So
 # the editor's source of truth stays the *plist dict* (native Python types); the

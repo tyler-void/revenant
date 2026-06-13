@@ -42,6 +42,8 @@ __pycache__/
 # decrypted level data (circumvention material — local only, never committed)
 tools/level-editor/levels/
 *.level.json
+# transcoded © sprite atlases (local render cache, never committed)
+tools/level-editor/textures/
 
 # ── local junk ───────────────────────────────────────────────────────────
 Screenshot_*.jpg

@@ -66,13 +66,12 @@ class H(BaseHTTPRequestHandler):
             return self._send(200, ld.atlas_meta_for_level(level))
         if self.path.startswith("/api/atlas/"):
             name = self.path[len("/api/atlas/"):].split("?")[0]
-            tp = ld.atlas_texture_path(name)
-            if not tp:
+            png = ld.transcode_atlas(name)   # game WebP → RGBA PNG (cached)
+            if not png:
                 return self._send(404, {"error": "no atlas %r" % name})
-            with open(tp, "rb") as f:
+            with open(png, "rb") as f:
                 body = f.read()
-            # textures are WebP regardless of the .png name
-            return self._send(200, body, "image/webp")
+            return self._send(200, body, "image/png")
         if self.path.startswith("/api/level/"):
             lid = self.path[len("/api/level/"):]
             p = ld.cache_path(lid)
