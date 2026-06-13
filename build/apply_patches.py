@@ -160,12 +160,24 @@ NATIVE_PATCHES = [
     ("bike.isRevealed",           0x5edeb0, "f0492de914b08de2", RET_YES),
     ("bike.locked#1",             0x6b6124, "14109fe514209fe5", RET_NO),
     ("bike.locked#2",             0x6b77e4, "14109fe514209fe5", RET_NO),
-    # --- UNLIMITED FUEL: useFuel: @0x6b1ca8 is `gasBarsLeft -= amount; bx lr` (void leaf).
-    # NOP it to `bx lr` at entry -> fuel is never consumed (gas stays topped via regen). ---
+    # --- UNLIMITED FUEL ---
+    # There are TWO consume paths, and the first patch alone was insufficient:
+    #   useFuel: @0x6b1ca8       — `gasBarsLeft -= amount; bx lr` (a leaf; MP/other path).
+    #   consumeBars: @0x6ab4b0   — the SINGLEPLAYER per-attempt consume. THIS is the one
+    #                              that actually drained the tank in play (user-reported:
+    #                              gauge showed full but it "dried" and demanded a refill).
+    # 1) NOP useFuel: to `bx lr` so its decrement never runs.
     ("useFuel:.noop",             0x6b1ca8, "30109fe5", "1eff2fe1"),  # bx lr
-    # Robust: redirect gasBarsLeft getter @0x6b4e24 -> `b gasBarsTotal @0x6b4e6c`, so the
-    # reported fuel ALWAYS equals the full tank (gauge shows full, never out-of-gas), no
-    # matter which path deducts the stored ivar. off=0x6b4e6c-0x6b4e24-8=0x40 -> imm 0x10.
+    # 2) consumeBars: does gasBarsLeft -= count (@0x6ab668) and returns success/failure;
+    #    the caller shows OutOfGasPopup on failure. At entry it tests a byte flag (the
+    #    game's OWN pause/unlimited path): `bne 0x6ab6d4` jumps to an exit that returns
+    #    SUCCESS (r0=1) WITHOUT decrementing. Force that branch unconditional (cond NE->AL,
+    #    0x1a->0xea) so the consume is always skipped-and-succeeds — no spend, no popup,
+    #    even at 0 bars. This is the surgical fix the gauge redirect couldn't reach.
+    ("consumeBars:.no-spend",     0x6ab4e4, "7a00001a", "7a0000ea"),  # bne->b skip-consume
+    # 3) Belt-and-suspenders gauge: redirect gasBarsLeft getter @0x6b4e24 -> `b gasBarsTotal
+    #    @0x6b4e6c`, so the reported fuel ALWAYS equals the full tank (gauge shows full) even
+    #    if the stored ivar is momentarily low. off=0x6b4e6c-0x6b4e24-8=0x40 -> imm 0x10.
     ("gasBarsLeft->Total",        0x6b4e24, "14109fe5", "100000ea"),  # b gasBarsTotal
     # --- UNLIMITED NITRO + HELMETS (generic consumable manager; type1=nitro, type2=helmet):
     #   consumableCount: -> always 99 (HUD/store/"do I have any" always satisfied)
