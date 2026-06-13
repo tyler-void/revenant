@@ -200,6 +200,7 @@ function nameOf(e){const n=(e.Properties||{}).name; return (n&&String(n).trim())
 let LID=null,LEVEL=null,ENTS=[],selected=null,dirty=false;
 let view={x:0,y:0,scale:1}, tool='select';
 let showGrid=true, snap=false, snapStep=20, showArt=true;
+const SPRITE_CS=2;   // HD atlas content-scale: texels → level points
 let hidden=new Set(), collapsed=new Set(BIG_GROUPS), foldOpen={Transform:true,Identity:true,Physics:true,Appearance:true,'Type-specific':true,Vertexes:true};
 let KEYS={}, FRAMES={}, ATLAS={};   // atlas frame meta + Image objects
 const LS=k=>'rvedit_'+k;
@@ -256,7 +257,8 @@ function drawGrid(){const b=s2w(0,0),e=s2w(cv.width,cv.height);
 function drawSprite(e){const P=e.Properties||{},pt=posOf(e);if(!pt)return;const fm=FRAMES[P.frame],img=fm&&ATLAS[fm.atlas];
   if(!fm||!img||!img.complete||!img.naturalWidth){return drawSpriteDot(e);}
   const [rx,ry,rw,rh]=fm.rect; let sw=fm.source[0]||rw, sh=fm.source[1]||rh;
-  const scl=(P.scale||1)*view.scale, dw=sw*scl, dh=sh*scl;
+  // atlas frames are in HD texels (@2x); level coords are points → ÷ content scale
+  const scl=(P.scale||1)*view.scale/SPRITE_CS, dw=sw*scl, dh=sh*scl;
   ctx.save(); ctx.translate(wx(pt.x),wy(pt.y)); ctx.rotate((P.rotation||0)*Math.PI/180);
   if(Array.isArray(P.color)&&P.color.length>=3){/* tint hint via alpha only */}
   ctx.globalAlpha=(P.opacity!=null?P.opacity:1);
@@ -438,7 +440,8 @@ async function loadLevel(lid){LID=lid;const r=await fetch('/api/level/'+encodeUR
   collapsed=new Set(BIG_GROUPS);$('#saveBtn').disabled=true;
   $('#key').placeholder=KEYS[lid]?'key on file ✓':'level key (hex)';
   await loadAtlas(lid);
-  renderInspector();renderTree();resize();frameAll();updZoom();updCount();updSel();
+  renderInspector();renderTree();updCount();updSel();
+  requestAnimationFrame(()=>{resize();frameAll();updZoom();draw();});  // fit once layout settles
   setStat(KEYS[lid]?'ready · key on file':'ready');}
 async function save(){LEVEL.Entities=ENTS.map(({_id,...e})=>e);setStat('saving…','busy');
   const r=await fetch('/api/level/'+encodeURIComponent(LID),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(LEVEL)});
