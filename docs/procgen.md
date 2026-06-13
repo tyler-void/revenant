@@ -194,11 +194,38 @@ or Halloween/Christmas.
   A missing theme config is a likely crash source on first world-5 load — test for it.
 - **Level-select navigation** to world 5 is a UI action (user taps) — verify on device.
 
-### Plan
-1. Generate `5_1.dat … 5_N.dat` (enhanced generator, lid `5_M`, rising difficulty).
-2. Drop into `assets/unpack/`, build, install, navigate to world 5, read logcat.
-3. If it loads → done (file-driven). If not → trace createLevelInfo caller, patch the
-   world-5 count (and/or mint `GameConfig_T5.dat`), retest.
+### EMPIRICAL RESULT (tested on device) — drop-in does NOT work
+Installed `5_1/5_2/5_3.dat` + cloned `GameConfig_T5.dat`, force-unlocked. On device
+**World 5 shows "COMING SOON" with no level selector.** So per-world availability is
+NOT file-driven — it's gated in native code.
+
+### The gate (located)
+- `WorldPanelComingSoon.ccbi` is shown instead of a real panel; the decision is a
+  `_comingSoon` ivar on `WorldPanel`, set at panel CREATION (in `LevelSelectionMenu.mm`
+  / `WorldPanel.m`), NOT via a setter (direct ivar write).
+- `getWorldPanelForIndex:` @0x56bacc is only an array lookup over `_worldPanels`.
+- `getFirstLockedWorld` @0x6b0ed0 + `getTotalLevels:` @0x6a6190 drive availability via
+  chained `objc_msgSend` — the SAME blind-objc-dispatch wall that left the bike-select
+  gate uncracked (see docs/BIKE-UNLOCK-STATUS.md / apply_patches.py note). Static
+  patching can't easily reach it.
+
+### Honest assessment + options
+World 5 is a MULTI-gate native RE (comingSoon flag + availability count + level count +
+theme + nav), in hard objc-dispatch territory. Three ways forward:
+1. **unidbg-trace it** — we now have a working ARM exec env (the LevelCodec oracle) the
+   bike-gate work lacked. Stand up the LevelSelectionMenu/WorldPanel objects in unidbg,
+   call the creation path, observe where `_comingSoon` is set and on what condition,
+   then patch that condition. Highest effort, highest fidelity.
+2. **Mod-loader (Phase 4 roadmap)** — redirect asset loads to an external `mods/` folder
+   via `CCFileUtils fullPathForFilename:`; ship generated levels as REPLACEMENTS for
+   existing slots without touching world registration. Sidesteps the comingSoon gate
+   entirely; the cleanest path to "custom levels load".
+3. **Designate a late campaign slot** as the custom/generated slot (e.g. last level of
+   W4) — pragmatic, no new world, but replaces one hand-made level.
+
+Recommendation: pursue (2) the mod-loader OR (3) a chosen slot for shipping generated
+levels now; treat (1) as a later deep-RE project. World 5 as a *visible new world* is
+real work, not a quick patch.
 
 ## 5. Open questions / bugs
 - **Barrels not visible on device** (generated W1L4 reported 2 barrels, none seen).
