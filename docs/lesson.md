@@ -16,8 +16,10 @@
   controls tutorial (`loadTutorial`), whose overlay logic depends on the bike
   becoming "ready"; a broken level hangs the tutorial and masks the real cause.
   Use a post-tutorial slot to isolate level bugs.
-- The real ground is **many small polygons** (median 4 vtx), not one big spline —
-  a single huge polygon may not build a valid physics body. (Open: confirm.)
+- **The ground is MANY small CCW polygons, not one big shape** (CONFIRMED across
+  130 levels: median 46 polygons/level, median 4 vtx, 72% ≤8 vtx). A single giant
+  generated polygon builds an invalid Box2D body → bike falls through. *Fix:*
+  generate the terrain as a strip of small CCW quad slabs (one per surface segment).
 - **Type fidelity** in plists: int vs real usually doesn't matter (the game reads
   NSNumber), but be deliberate. JSON preserves int/float via the `.0`.
 

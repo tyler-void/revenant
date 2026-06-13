@@ -80,6 +80,15 @@ def ground_curve(length, rng, difficulty, dx=64.0):
     return raw
 
 
+def _signed_area(vtx):
+    a = 0.0
+    n = len(vtx)
+    for i in range(n):
+        x1, y1 = vtx[i]["x"], vtx[i]["y"]; x2, y2 = vtx[(i + 1) % n]["x"], vtx[(i + 1) % n]["y"]
+        a += x1 * y2 - x2 * y1
+    return a / 2.0   # >0 = CCW (Y-up)
+
+
 def _interp(top, x):
     if x <= top[0][0]: return top[0][1]
     for i in range(1, len(top)):
@@ -96,21 +105,21 @@ def generate(seed, length=2600, difficulty=0.5, template_lid="1_1"):
     top = ground_curve(length, rng, difficulty)
     baseline = min(y for _, y in top) - 320
 
-    # terrain polygon: top surface (smooth spline) + flat bottom, closed
-    vtx = [{"x": x, "y": y, "segments": 4} for x, y in top]
-    vtx.append({"x": length, "y": baseline, "segments": 1})
-    vtx.append({"x": 0.0, "y": baseline, "segments": 1})
-    # Box2D needs CCW winding for solid ground (collision solid-side UP); the
-    # top→right→bottom→left order above is CW, so reverse it. (1_1's rideable
-    # terrain is 97/104 CCW — CW makes the bike fall through.)
-    vtx.reverse()
-    terrain = {"Type": "EditorPhysicsObject", "Selected": False, "Vertexes": vtx,
-               "Properties": copy.deepcopy(tpl["terrain_props"])}
-    # position=[0,0] with world-space vertexes is safe whether the game treats
-    # vertexes as world-absolute OR body-local (0 + vertex = vertex either way).
-    terrain["Properties"].update(position=[0.0, 0.0], name="GenGround", spline=True, tag=1)
-
-    ents = [terrain]
+    # GROUND = a strip of small CCW quad slabs, one per surface segment — this
+    # mirrors the real levels (median 46 polygons/level, mostly <=8 vtx). A single
+    # giant polygon builds an invalid Box2D body and the bike falls through.
+    ents = []
+    for i in range(len(top) - 1):
+        x0, y0 = top[i]; x1, y1 = top[i + 1]
+        vtx = [{"x": x0, "y": y0, "segments": 1}, {"x": x0, "y": baseline, "segments": 1},
+               {"x": x1, "y": baseline, "segments": 1}, {"x": x1, "y": y1, "segments": 1}]
+        if _signed_area(vtx) < 0:   # ensure CCW (solid ground, collision normal up)
+            vtx.reverse()
+        slab = {"Type": "EditorPhysicsObject", "Selected": False, "Vertexes": vtx,
+                "Properties": copy.deepcopy(tpl["terrain_props"])}
+        slab["Properties"].update(position=[0.0, 0.0], name="GenGround%d" % i,
+                                  spline=False, tag=1)
+        ents.append(slab)
 
     # FINISH: clone the gate children + win-trigger, shift to the finish zone
     fx = length - 140

@@ -67,6 +67,27 @@ Entity types and how they render/behave:
 ⚠ **Index-based references** (`refobjectList`, `mountedSprites`) point to entity
 ARRAY INDICES. If you rebuild/reorder the entity list you MUST remap them.
 
+## Level corpus analysis (all 130 decoded levels)
+
+Decoded every level with the universal key (`LevelCodec` batch mode) and measured:
+- **Terrain = MANY small polygons**: median **46** EditorPhysicsObjects/level
+  (range 14–170), median **4 vertices** each, 72% ≤8 vtx. **~67% CCW.** The
+  ground is a strip of small CCW quad/slab pieces — NOT one big shape. (This is
+  why a single giant generated polygon fails: invalid Box2D body → bike falls
+  through. Fix: generate the ground as many small CCW quad slabs, like the game.)
+- **Obstacle inventory (avg/level by world)**:
+  | world | levels | barrels | revolute-joints (see-saws/wheels) | distance-joints (rope) | water | triggers |
+  |---|---|---|---|---|---|---|
+  | 1 | 30 | 2 | 9 | 2 | 2 | 21 |
+  | 2 | 40 | 1 | **29** | 6 | 3 | 21 |
+  | 3 | 45 | 0 | 10 | 4 | 2 | 19 |
+  | 4 | 15 | 0 | 4 | 1 | 1 | 28 |
+  Barrels are an early-world hazard; **world 2 is see-saw/joint-heavy**; water is
+  everywhere (~2–3/level); ~20 triggers/level (camera/slow-mo/events).
+- **Difficulty curve**: length med ~2280 (w1) → ~1850 (w4) — later worlds are
+  *shorter but tighter*; **gold medal time 26s (w1) → 20s (w4)**. So escalate by
+  raising hazard density + tightening medal times, not by lengthening.
+
 ## The render model (for WYSIWYG editing)
 
 - **Texture atlases are NON-STANDARD WebP** (12-byte VP8X w/ 4-byte dims; lossless
@@ -85,6 +106,50 @@ ARRAY INDICES. If you rebuild/reorder the entity list you MUST remap them.
 - **Terrain fill**: clip each polygon, tile its `textureFill` (content-scaled,
   rotated by `textureRot`). This is what makes the green outline read as ground.
 
+## Procgen approach (for levelgen.py — research-grounded)
+
+The target generator (rewrite of `levelgen.py`) follows a **two-tier rhythm/chunk-
+over-spine** model — "playable by construction," not by luck:
+
+1. **Abstract action plan first** (no geometry): a sequence of intended verbs
+   (ride / hop / big-jump / flip / balance / brake) with a **difficulty budget**.
+   Generating the plan first guarantees each obstacle fits a verb the player can
+   perform (Launchpad / Smith & Whitehead).
+2. **Realize each beat as a chunk** — a pre-authored obstacle template (ramp, gap,
+   see-saw, barrel cluster) at a difficulty tier — and **stitch chunks over a
+   smooth terrain spine**. Pure noise is ONLY filler/rest terrain (it must never
+   create an obstacle by accident).
+
+- **Terrain spine:** sum-of-sines base (1–3 terms; smooth, controllable — Tiny
+  Wings / Hill Climb Racing) + small fBm overlay (2–4 octaves, lacunarity 2,
+  persistence 0.5, ≤25% amplitude). **Never midpoint-displacement** (spikes).
+  Hard-clamp grade to **≤40–45° up / ≤55–60° down** before splining; re-smooth.
+  Tessellate to small CCW quad slabs / Box2D chain.
+- **Difficulty envelope** over progress `t`: warm-up 0–15% (flat, teach), ramp
+  15–80% (budget rises, sawtooth dips = recovery zones), climax 80–95% (hardest
+  set-piece), resolution 95–100% (easy run to finish — never kill at the line).
+  Escalate by hazard *severity + density + tighter medal times*, NOT by length
+  (matches the corpus: w1→w4 shorter but tighter).
+- **Solvability = construct + verify.** Construct: size every gap to projectile
+  range `R = v²·sin(2α)/g` with a 0.7 safety factor; landings flat (≤25°) with a
+  recovery run. Verify (generate-and-test): a fast **kinematic reachability**
+  filter, then optionally a **headless Box2D agent sim** (full-throttle + scripted
+  jumps) as the gold-standard solvable/unsolvable gate; downgrade the failing
+  chunk and retry (cap ~20, else fallback seed). Everything seeded → reproducible.
+- **Roguelike discipline:** weighted chunk tables gated by budget; a guaranteed
+  rideable *critical path* placed + certified FIRST, then non-blocking decoration
+  (rings/coins/props) after (Spelunky); recently-used-chunk cooldown for variety;
+  introduce each hazard type in isolation before combining.
+- **Chunk contract** (for stitching): each template declares entry/exit height +
+  slope, length, cost, tier, tags, min run-up, internal randomizable slots; join
+  chunks with a C¹-continuous Catmull-Rom connector (match tangents, spread slope
+  change over the connector — no seam spikes).
+- Sources: Launchpad (Smith/Whitehead/Treanor/Mateas, IEEE TCIAIG 2011); "Sure
+  Footing" budget/chunk model (Game Developer); Spelunky critical-path (PCG wiki);
+  Sturgeon reachability-as-constraint (arXiv); fBm terrain (Book of Shaders ch.13);
+  Tiny Wings / Hill Climb sine terrain; fairness = transparency + telegraphing +
+  no surprise deaths (SuperJump).
+
 ## Open questions (TODO research)
 
 - **Level registration**: where are per-world level COUNTS + unlock gates stored?
@@ -93,10 +158,10 @@ ARRAY INDICES. If you rebuild/reorder the entity list you MUST remap them.
   (config key) or `libgame.so`. Needed for an additive World 5.
 - **Mod-loader hook**: `-[CCFileUtils fullPathForFilename:]` redirect to an
   external `mods/` dir (game has `getExternalStoragePath`, `/sdcard`).
-- **Why a minimal generated level hangs the tutorial** — even with CCW terrain.
-  Suspect: the real ground is many small polygons; a single big spline may build
-  an invalid physics body, OR the bike needs a specific spawn/ground setup. To
-  isolate, test in a NON-tutorial slot (levels 4+). *(under investigation)*
+- **Why a minimal generated level hung** — ANSWERED by the corpus analysis: the
+  real ground is many small CCW polygons; our single 43-vtx polygon built an
+  invalid Box2D body → bike fell through → tutorial hung. Generator now emits a
+  strip of small CCW quad slabs. Also: ALWAYS test in a non-tutorial slot (4+).
 - **Procgen technique** — see the difficulty-curve / solvability research (feeds
   `levelgen.py`).
 
