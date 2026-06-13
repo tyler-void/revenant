@@ -13,6 +13,8 @@
         <maven.compiler.source>17</maven.compiler.source>
         <maven.compiler.target>17</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <!-- override with -Dexec.mainClass=com.resurrect.<Class> -->
+        <exec.mainClass>com.resurrect.BikeRivalsRunner</exec.mainClass>
     </properties>
 
     <dependencies>
@@ -34,7 +36,7 @@
                 <artifactId>exec-maven-plugin</artifactId>
                 <version>3.1.0</version>
                 <configuration>
-                    <mainClass>com.resurrect.BikeRivalsRunner</mainClass>
+                    <mainClass>${exec.mainClass}</mainClass>
                     <systemProperties>
                         <systemProperty>
                             <key>java.library.path</key>

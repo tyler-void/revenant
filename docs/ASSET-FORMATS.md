@@ -51,23 +51,46 @@ File offsets (== vaddr; Ghidra image base adds `0x10000`):
 Plaintext = **JSON** (TouchJSON `CJSONDeserializer`); level terrain = Catmull-Rom splines →
 Box2D edge chains (see [LEVEL-MAKER](LEVEL-MAKER.md)).
 
-### Next steps to actually decrypt (the open Phase-2 blocker)
+### Crypto internals (recovered — file offsets == vaddr)
 
-Static xref is **blocked**: refs are GOT-bridged PIC, and Ghidra's auto-analysis materialized
-neither the string xrefs nor the ObjC method IMPs (only `Label`/`PTR_` symbols for the selector
-strings; the method-name pointer for the crypto category sits near `0xd0d8d8`). Two viable routes:
+Method table (12-byte entries `{IMP, name_ptr, types_ptr}` at `.data` ~`0xcfd5d0`):
 
-- **Route B — unidbg (recommended).** We already load `libgame.so` and call its methods
-  ([tools/unidbg](../tools/unidbg/)). Call the **no-password `+[NSData DataWithContentsOfFile:]`**
-  (cleanest — it must use a default/internal password) or the level loader, passing an `NSString`
-  path; read the returned `NSData`. Needs Foundation object construction in unidbg (build an
-  `NSString`/`NSData` via the runtime) — the one piece of plumbing left.
-- **Route A — reverse the cipher.** Parse the ObjC method list to resolve the decryptor IMP
-  (start from the method-name pointer ~`0xd0d8d8`), disassemble it for the KDF + stream algorithm
-  + the constant Password, then reimplement in Python. More thorough; gives an offline codec.
+| Method | IMP |
+|---|---|
+| `+[NSData DataDecryptedFromData:Password:]` | `0x64e93c` |
+| `+[NSData DataWithContentsOfFile:Password:]` | `0x64ea98` |
+| `+[NSData DataWithContentsOfFile:]` (no-password) | `0x64f378` |
 
-> Analyzed Ghidra project is at `/tmp/revenant-re/proj1` (note: `/tmp` may not survive a reboot —
-> re-import is ~minutes). Scripts: `/tmp/revenant-re/Find*.java`.
+- **Cipher is layered, NOT a trivial transform.** `DataDecryptedFromData:` includes a **nibble-swap**
+  pass (`b=(b>>4)|(b<<4)` at `0x64e9a0–0x64e9c4`, gated even/odd by `tst r0,#1`) — but nibble-swap
+  alone does NOT yield JSON (tested: stays 38% printable). The real keystream is derived in the
+  **cipher-core functions** `0x650090`, `0x650570`, `0x65085c` (called from
+  `DataWithContentsOfFile:Password:`), keyed by the Password. Full static reverse = reversing those.
+- **PIC model** (why flat xref failed): globals are reached as `ldr rX,[pc,#imm]` (a *PC-relative
+  displacement*, often negative) then `add rX, pc, rX`; selectors dispatch through a stub at
+  **`0x3783d4`** (the `objc_msgSend` equivalent). No named `objc_msgSend`/`objc_getClass` export
+  (Apportable inlines/renames); `sel_registerName` @ `0x3775e0` IS exported.
+
+### Next steps — two routes (Phase-2 blocker)
+
+- **Route B — unidbg, calling the cipher-core C functions directly (now the recommended sub-route).**
+  *Finding from the WIP harness* ([tools/unidbg/.../LevelDecrypt.java](../tools/unidbg/src/main/java/com/resurrect/LevelDecrypt.java)):
+  the harness loads the lib, fabricates a valid `NSConstantString` path (`isa=0xb9ae00` read from the
+  const string at `0xc54ad0`), and **enters** the no-pw `DataWithContentsOfFile:` (`0x64f378`) — but it
+  returns nil **without any file IO**, and the hook on `DataWithContentsOfFile:Password:` never fires.
+  Conclusion: **ObjC `msgSend` dispatch doesn't reach IMPs in unidbg** for this Apportable runtime (the
+  original crack only ever called *leaf getter IMPs directly*, never via dispatch). So every high-level
+  Foundation method bails the same way.
+  **→ Next: call the cipher-core leaf functions `0x650090` / `0x650570` / `0x65085c` DIRECTLY** (raw
+  buffers + key, no dispatch — the proven `module.callFunction` pattern). First disassemble them to get
+  signatures + confirm they're msgSend-free, and trace how the password becomes the keystream. Run
+  `mvn -q exec:java -Dexec.mainClass=com.resurrect.LevelDecrypt` (JDK17, `MAVEN_OPTS=-Djava.library.path=$PWD/natives`).
+- **Route A — full static reverse** of those same core functions for an offline Python codec (no unidbg).
+  Harder (the keystream KDF), but yields a portable codec. Fabrication/IMP anchors above still apply.
+
+> Analyzed Ghidra project: `/tmp/revenant-re/proj1` (re-import ~minutes if `/tmp` is cleared).
+> Scripts: `/tmp/revenant-re/Find*.java`. The writer `+[NSData ArchiveRootObject:ToFile:Password:]`
+> (`0xa6dbed` selector) is the re-encrypt path for the level editor.
 
 ## Plaintext assets (no cipher)
 
