@@ -87,7 +87,30 @@ Method table (12-byte entries `{IMP, name_ptr, types_ptr}` at `.data` ~`0xcfd5d0
 
 ### Next steps — two routes (Phase-2 blocker)
 
-- **Route B — unidbg, calling the cipher-core C functions directly (now the recommended sub-route).**
+- **Route B — unidbg dynamic (DISPATCH NOW WORKS — see breakthrough below). RECOMMENDED.**
+  *Breakthrough (this session):* unidbg ObjC `msgSend` dispatch failed only because `vm.loadLibrary`
+  was called with `forceCallInit=false` → `init_array`/`__objc_exec_class` never ran → classes
+  unregistered. **`loadLibrary(so, true)` registers the classes and dispatch works.** Two more gotchas
+  solved: (1) `module.callFunction` treats each `Long` arg as a **64-bit value spanning a register
+  pair** (arg0→r0:r1, arg1→r2:r3) — pass **`int`s** so each lands in one register (r0,r1,r2,r3);
+  (2) `DataWithContentsOfFile:Password:` (IMP `0x64ea98`) ignores `self`, so call it with
+  `(0, 0, pathNSString, pwNSString)`; it has an early `[path length] >= 8` check so the path must be
+  ≥8 chars (use `"1/1_1.dat"`). With a fabricated `NSConstantString` path + `forceCallInit`, the IMP
+  now runs the FULL decrypt path: **`cipher_setkey` and `cipher_process` both fire.** Set the VFS via
+  `AndroidEmulatorBuilder.setRootDir(rootfs)` (builder mutates; call as a statement, not chained).
+  *Refined finding:* `0x64ea98` is really the **data decryptor** — it calls `[arg bytes]`/`[arg length]`
+  on r2 and decrypts that buffer (it does NOT read a file; passing a path string made it "decrypt" the
+  path). Passing a fabricated object over the real level bytes, `cipher_process` runs on real data
+  (`len≈55k`). *Last mile:* the fabricated object reused the **NSConstantString** isa (a *string*
+  class), so `bytes`/`length` returned string-semantic values (≈0 ptr) for binary data. **Need a real
+  `NSData`:** get the NSData class (`objc_getClass("NSData")` — locate it near the `'NSData'` cstr use;
+  `0x37295c` is called with both selectors and `"NSData"`, so it may be a generic intern/lookup —
+  probe its return), then `+[NSData dataWithBytes:length:]` (IMP `0x398c48`) to wrap the level bytes,
+  pass to `0x64ea98`, and read the result via `objc_msgSend(result, sel_registerName("bytes"/"length"))`.
+  Password nil → `setkey(key=0)` default branch; if wrong, hook `cipher_setkey` (`0x650570`) `r1` to
+  capture the constant. Harness `LevelDecrypt.java` implements everything up to this point.
+
+- **Route B (old framing) — unidbg, calling the cipher-core C functions directly.**
   *Finding from the WIP harness* ([tools/unidbg/.../LevelDecrypt.java](../tools/unidbg/src/main/java/com/resurrect/LevelDecrypt.java)):
   the harness loads the lib, fabricates a valid `NSConstantString` path (`isa=0xb9ae00` read from the
   const string at `0xc54ad0`), and **enters** the no-pw `DataWithContentsOfFile:` (`0x64f378`) — but it

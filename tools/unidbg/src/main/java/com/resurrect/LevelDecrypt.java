@@ -30,7 +30,12 @@ public class LevelDecrypt {
     static final long DWF_PW   = 0x64ea98L; // +[NSData DataWithContentsOfFile:Password:]
     static final long DWF_NOPW = 0x64f378L; // +[NSData DataWithContentsOfFile:]
     static final long DEC_PW   = 0x64e93cL; // +[NSData DataDecryptedFromData:Password:]
+    static final long SETKEY   = 0x650570L; // cipher_setkey(ctx, key)
+    static final long PROCESS  = 0x65085cL; // cipher_process(ctx, data, len)
+    static final long SEL_REG  = 0x3775e0L; // sel_registerName(char*)
+    static final long MSGSEND  = 0x3783d4L; // objc_msgSend(recv, sel, ...)
     static final long NSCONST_SRC = 0xc54ad0L;
+    static Module MOD;
 
     static AndroidEmulator emulator;
 
@@ -51,12 +56,22 @@ public class LevelDecrypt {
     public static void main(String[] args) throws Exception {
         File so = new File("src/main/resources/libgame.so");
         if(!so.exists()) so=new File("tools/unidbg/src/main/resources/libgame.so");
-        emulator = AndroidEmulatorBuilder.for32Bit().setProcessName("com.miniclip.bikerivals").build();
-        Memory memory = emulator.getMemory();
-        memory.setLibraryResolver(new AndroidResolver(23));
 
         final File lvl = levelFile();
         log("level file: " + lvl + " exists=" + lvl.exists() + " size=" + lvl.length());
+        // back the VFS with a real rootfs so stat()+open() of "1/1_1.dat" both succeed
+        File rootfs = new File("/tmp/br-rootfs");
+        new File(rootfs, "1").mkdirs();
+        java.nio.file.Files.copy(lvl.toPath(), new File(rootfs, "1/1_1.dat").toPath(),
+                java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        log("rootfs: " + rootfs + "/1/1_1.dat");
+
+        AndroidEmulatorBuilder builder = AndroidEmulatorBuilder.for32Bit();
+        builder.setProcessName("com.miniclip.bikerivals");
+        builder.setRootDir(rootfs);
+        emulator = builder.build();
+        Memory memory = emulator.getMemory();
+        memory.setLibraryResolver(new AndroidResolver(23));
         emulator.getSyscallHandler().addIOResolver(new IOResolver<AndroidFileIO>(){
             public FileResult<AndroidFileIO> resolve(Emulator<AndroidFileIO> emu, String path, int oflags){
                 log("  [vfs] resolve("+path+", oflags=0x"+Integer.toHexString(oflags)+")");
@@ -70,64 +85,85 @@ public class LevelDecrypt {
 
         VM vm = emulator.createDalvikVM();
         vm.setVerbose(false);
-        DalvikModule dm = vm.loadLibrary(so, false);
+        DalvikModule dm = vm.loadLibrary(so, true); // forceCallInit=true -> runs init_array / __objc_exec_class (registers ObjC classes)
         Module module = dm.getModule();
         long base = module.base;
         final Backend backend = emulator.getBackend();
         log("loaded base=0x"+Long.toHexString(base));
 
         int isa = rd32(base+NSCONST_SRC);
-        // fabricate NSConstantString path
-        byte[] path = "1_1.dat".getBytes();
-        MemoryBlock cblk = memory.malloc(path.length+1,true);
-        long cstrAddr = cblk.getPointer().peer & 0xffffffffL;
-        byte[] pz=new byte[path.length+1]; System.arraycopy(path,0,pz,0,path.length);
-        backend.mem_write(cstrAddr, pz);
+        // 0x64ea98 decrypts the object passed as r2 (calls [arg bytes]/[arg length]).
+        // Fabricate an NSData-like object {isa, bytesPtr, length} over the real level file bytes.
+        byte[] fileBytes = java.nio.file.Files.readAllBytes(lvl.toPath());
+        MemoryBlock dblk = memory.malloc(fileBytes.length, true);
+        long dataPtr = dblk.getPointer().peer & 0xffffffffL;
+        backend.mem_write(dataPtr, fileBytes);
         MemoryBlock sblk = memory.malloc(12,true);
         long sAddr = sblk.getPointer().peer & 0xffffffffL;
         byte[] st=new byte[12];
         System.arraycopy(le(isa),0,st,0,4);
-        System.arraycopy(le((int)cstrAddr),0,st,4,4);
-        System.arraycopy(le(path.length),0,st,8,4);
+        System.arraycopy(le((int)dataPtr),0,st,4,4);
+        System.arraycopy(le(fileBytes.length),0,st,8,4);
         backend.mem_write(sAddr, st);
-        log("fabricated NSString \""+cstr(cstrAddr,16)+"\" @0x"+Long.toHexString(sAddr));
+        log("fabricated data obj @0x"+Long.toHexString(sAddr)+" bytes=0x"+Long.toHexString(dataPtr)+" len="+fileBytes.length);
 
-        final long nopw=(base+DWF_NOPW)&0xffffffffL, dwfpw=(base+DWF_PW)&0xffffffffL, dec=(base+DEC_PW)&0xffffffffL;
-        final String[] pw = {null};
+        MOD = module;
+        final long dwfpw=(base+DWF_PW)&0xffffffffL, dec=(base+DEC_PW)&0xffffffffL;
+        final long setkey=(base+SETKEY)&0xffffffffL, process=(base+PROCESS)&0xffffffffL;
         CodeHook hook = new CodeHook(){
             public void hook(Backend b, long address, int size, Object u){
-                if(address==nopw) log("  >> no-pw DataWithContentsOfFile: entered");
-                else if(address==dwfpw || address==dec){
-                    String which = address==dwfpw ? "DataWithContentsOfFile:Password:" : "DataDecryptedFromData:Password:";
-                    long r2=b.reg_read(ArmConst.UC_ARM_REG_R2).intValue()&0xffffffffL;
-                    long r3=b.reg_read(ArmConst.UC_ARM_REG_R3).intValue()&0xffffffffL;
-                    log("  >> "+which+"  r2=0x"+Long.toHexString(r2)+" r3=0x"+Long.toHexString(r3));
-                    try {
-                        long pcstr=rd32(r3+4)&0xffffffffL;
-                        String s=cstr(pcstr,64);
-                        log("     r3.isa=0x"+Integer.toHexString(rd32(r3))+" [r3+4]->\""+s+"\"  raw[r3..]="+cstr(r3,24));
-                        if(s.length()>0 && pw[0]==null) pw[0]=s;
-                    } catch(Throwable t){ log("     read fail: "+t); }
+                long r0=b.reg_read(ArmConst.UC_ARM_REG_R0).intValue()&0xffffffffL;
+                long r1=b.reg_read(ArmConst.UC_ARM_REG_R1).intValue()&0xffffffffL;
+                long r2=b.reg_read(ArmConst.UC_ARM_REG_R2).intValue()&0xffffffffL;
+                long r3=b.reg_read(ArmConst.UC_ARM_REG_R3).intValue()&0xffffffffL;
+                if(address==dwfpw) log("  >> DataWithContentsOfFile:Password:  r0=0x"+Long.toHexString(r0)+" r1=0x"+Long.toHexString(r1)+" r2(path)=0x"+Long.toHexString(r2)+" r3(pw)=0x"+Long.toHexString(r3));
+                else if(address==dec) log("  >> DataDecryptedFromData:Password:  data=0x"+Long.toHexString(r2)+" pw=0x"+Long.toHexString(r3));
+                else if(address==setkey){
+                    log("  >> cipher_setkey(ctx=0x"+Long.toHexString(r0)+", key=0x"+Long.toHexString(r1)+")");
+                    if(r1!=0){ try{ log("       key NSStr[+4]->\""+cstr(rd32(r1+4)&0xffffffffL,48)+"\"  raw=\""+cstr(r1,32)+"\""); }catch(Throwable t){} }
                 }
+                else if(address==process) log("  >> cipher_process(ctx=0x"+Long.toHexString(r0)+", data=0x"+Long.toHexString(r1)+", len="+r2+")");
             }
             public void onAttach(UnHook h){}
             public void detach(){}
         };
-        backend.hook_add_new(hook, nopw, nopw+4, null);
-        backend.hook_add_new(hook, dwfpw, dwfpw+4, null);
-        backend.hook_add_new(hook, dec, dec+4, null);
+        for(long a: new long[]{dwfpw,dec,setkey,process}) backend.hook_add_new(hook, a, a+4, null);
 
+        // Call DataWithContentsOfFile:Password: IMP directly (self/_cmd unused), path=fabricated, pw=nil
+        log("=== MY CALL NOW: DWF_PW(self=0,_cmd=0,path=0x"+Long.toHexString(sAddr)+",pw=0) ===");
         try {
-            Number ret = module.callFunction(emulator, DWF_NOPW, 0L, 0L, sAddr);
+            Number ret = module.callFunction(emulator, DWF_PW, 0, 0, (int) sAddr, 0); // r0=self,r1=_cmd,r2=path,r3=pw(nil)
             long r=ret==null?0:ret.longValue()&0xffffffffL;
-            log("no-pw returned 0x"+Long.toHexString(r));
-            if(r!=0){
-                // result is an NSData*; dump a little of its struct + try common bytes-ptr layouts
-                log("  result NSData @0x"+Long.toHexString(r)+" struct="+cstr(r,4));
-            }
+            log("DataWithContentsOfFile:Password: returned 0x"+Long.toHexString(r));
+            if(r!=0) dumpNSData(r);
         } catch(Throwable t){ log("call threw: "+t); }
-        log("=== captured PASSWORD = " + (pw[0]==null?"(none)":("\""+pw[0]+"\"")));
         emulator.close();
+    }
+    static long cstrAlloc(String s){
+        byte[] b=(s+"\0").getBytes();
+        MemoryBlock m=emulator.getMemory().malloc(b.length,true);
+        long a=m.getPointer().peer&0xffffffffL;
+        emulator.getBackend().mem_write(a,b);
+        return a;
+    }
+    static void dumpNSData(long obj){
+        try{
+            long selB=MOD.callFunction(emulator,SEL_REG,(int)cstrAlloc("bytes")).longValue()&0xffffffffL;
+            long selL=MOD.callFunction(emulator,SEL_REG,(int)cstrAlloc("length")).longValue()&0xffffffffL;
+            long ptr=MOD.callFunction(emulator,MSGSEND,(int)obj,(int)selB).longValue()&0xffffffffL;
+            long len=MOD.callFunction(emulator,MSGSEND,(int)obj,(int)selL).longValue()&0xffffffffL;
+            log("  NSData -bytes=0x"+Long.toHexString(ptr)+" -length="+len);
+            if(ptr!=0 && len>0 && len<10_000_000){
+                int n=(int)Math.min(len,4096);
+                byte[] data=emulator.getBackend().mem_read(ptr,n);
+                int pr=0; for(byte x:data){int c=x&0xff; if((c>=32&&c<127)||c==9||c==10||c==13) pr++;}
+                String head=new String(data,0,Math.min(n,220)).replaceAll("[^\\x20-\\x7e\\n\\t]",".");
+                log("  printable="+(100*pr/n)+"%  head="+head);
+                byte[] full=emulator.getBackend().mem_read(ptr,(int)Math.min(len,2_000_000));
+                java.nio.file.Files.write(java.nio.file.Paths.get("/tmp/1_1.decrypted"), full);
+                log("  wrote /tmp/1_1.decrypted ("+full.length+" bytes)");
+            }
+        }catch(Throwable t){ log("  dumpNSData fail: "+t); }
     }
     static void log(String s){ System.out.println("[LD] "+s); }
 }
