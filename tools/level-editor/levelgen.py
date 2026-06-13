@@ -99,7 +99,7 @@ def _interp(top, x):
     return top[-1][1]
 
 
-def generate(seed, length=2600, difficulty=0.5, template_lid="1_1"):
+def generate(seed, length=2600, difficulty=0.5, template_lid="1_1", lid="5_1"):
     rng = random.Random(seed)
     tpl = load_templates(template_lid)
     top = ground_curve(length, rng, difficulty)
@@ -154,7 +154,9 @@ def generate(seed, length=2600, difficulty=0.5, template_lid="1_1"):
     # medal times scale with length (gold tightest)
     base = length / 95.0
     times = [round(base * 1.18, 1), round(base * 1.08, 1), round(base, 1)]
-    return {"lid": "5_1", "type": 2, "times": times, "Entities": ents}
+    # lid MUST match the slot the .dat is placed in — the game keys off it and
+    # rejects a level whose lid doesn't match the requested path (empty scene).
+    return {"lid": lid, "type": 2, "times": times, "Entities": ents}
 
 
 def _cli():
@@ -165,9 +167,10 @@ def _cli():
     ap.add_argument("length", nargs="?", type=float, default=2600)
     ap.add_argument("difficulty", nargs="?", type=float, default=0.5)
     ap.add_argument("--template", default="1_1")
+    ap.add_argument("--lid", default="5_1", help="MUST match the target slot (e.g. 1_4 to test in World 1 Level 4)")
     a = ap.parse_args()
     seed = int(a.seed) if a.seed.lstrip("-").isdigit() else a.seed
-    lvl = generate(seed, a.length, a.difficulty, a.template)
+    lvl = generate(seed, a.length, a.difficulty, a.template, a.lid)
     json.dump(lvl, open(a.out, "w"))
     n = len(lvl["Entities"])
     print("generated %s  seed=%s length=%.0f diff=%.2f  (%d entities, times=%s)"

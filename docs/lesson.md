@@ -9,6 +9,10 @@
   builds collision solid-side-DOWN → the bike falls straight through → the race
   never starts. (1_1's rideable terrain is 97/104 CCW.) *Fix:* reverse the vertex
   list so signed area > 0 (Y-up).
+- **A level's `lid` must match the slot it's placed in.** A `.dat` swapped into
+  `1/1_4.dat` must have `lid:"1_4"`; the game keys off it and rejects a mismatched
+  level (decrypt succeeds — confirmed via the RVLEN keylog — but the scene never
+  builds: no terrain, no bike, frozen). The generator takes `--lid` for this.
 - **`refobjectList` / `mountedSprites` are entity ARRAY INDICES, not tags.** Rebuild
   or reorder the entity list and these references break. *Fix:* remap indices on
   assembly (the generator does this for the finish group).
