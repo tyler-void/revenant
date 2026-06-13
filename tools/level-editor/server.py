@@ -64,11 +64,12 @@ class H(BaseHTTPRequestHandler):
             with open(p) as f:
                 level = json.load(f)
             return self._send(200, ld.atlas_meta_for_level(level))
-        if self.path.startswith("/api/atlas/"):
-            name = self.path[len("/api/atlas/"):].split("?")[0]
-            png = ld.transcode_atlas(name)   # game WebP → RGBA PNG (cached)
+        if self.path.startswith("/api/atlas/") or self.path.startswith("/api/fill/"):
+            opaque = self.path.startswith("/api/fill/")
+            name = self.path.split("/")[-1].split("?")[0]
+            png = ld.transcode_atlas(name, key=not opaque)   # sprites keyed, fills opaque
             if not png:
-                return self._send(404, {"error": "no atlas %r" % name})
+                return self._send(404, {"error": "no texture %r" % name})
             with open(png, "rb") as f:
                 body = f.read()
             return self._send(200, body, "image/png")

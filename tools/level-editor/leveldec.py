@@ -134,24 +134,31 @@ def _vp8_only_webp(raw):
         off += 8 + sz + (sz & 1)
     return None
 
-def transcode_atlas(name):
-    """Game WebP atlas → browser-drawable RGBA PNG (cached). Returns path or None."""
+def transcode_atlas(name, key=True):
+    """Game WebP atlas/texture → browser-drawable PNG (cached). Returns path or None.
+
+    key=True  → chroma-key black to alpha (sprite atlases: transparent backgrounds)
+    key=False → opaque RGB (terrain fill/edge textures: solid tileable ground)
+    """
     src = atlas_texture_path(name)
     if not src:
         return None
     os.makedirs(TEXCACHE, exist_ok=True)
-    out = os.path.join(TEXCACHE, os.path.basename(name))   # keep the .png name
+    base = os.path.basename(name)
+    out = os.path.join(TEXCACHE, base if key else base[:-4] + ".opaque.png")
     if os.path.exists(out) and os.path.getsize(out) > 0 and os.path.getmtime(out) >= os.path.getmtime(src):
         return out
     vp8 = _vp8_only_webp(open(src, "rb").read())
     if not vp8:
         return None
-    tmp = os.path.join("/tmp", "rv_vp8_" + os.path.basename(name) + ".webp")
+    tmp = os.path.join("/tmp", "rv_vp8_" + base + ".webp")
     with open(tmp, "wb") as f:
         f.write(vp8)
-    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", tmp,
-                    "-vf", "colorkey=0x000000:0.10:0.02", out],
-                   capture_output=True)
+    cmd = ["ffmpeg", "-y", "-loglevel", "error", "-i", tmp]
+    if key:
+        cmd += ["-vf", "colorkey=0x000000:0.10:0.02"]
+    cmd += [out]
+    subprocess.run(cmd, capture_output=True)
     return out if os.path.exists(out) and os.path.getsize(out) > 0 else None
 
 # ── plist ↔ JSON (display) ──────────────────────────────────────────────────
