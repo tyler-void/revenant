@@ -20,10 +20,10 @@ re-encrypt with the game's own writer. The plaintext is JSON (Catmull-Rom spline
 | # | Phase | Difficulty | Status |
 |---|---|---|---|
 | 1 | **Bike editor** (modify + clone-to-create bikes) | 🟢 Easy | ✅ editor done (CLI + web UI); new-bike *roster registration* gated on Phase 2 |
-| 2 | **Level-decrypt spike** (unidbg → JSON → schema) | 🟡 Medium | 🚧 blocked — cipher is per-file (many-time-pad **ruled out**); needs the binary codec via unidbg. See [ASSET-FORMATS](ASSET-FORMATS.md) |
-| 3 | **Level editor** (splines + object palette → re-encrypt) | 🟡 Medium | ✅ done — viewer + drag-edit + save/export, device-verified |
-| 4 | **World 5 = Custom/Community Levels** (the delivery mechanism) | 🟡 Medium | 🔬 |
-| 5 | **Procedural level generator** (random/seeded tracks) | 🟡 Medium | 🔬 |
+| 2 | **Level-decrypt spike** (unidbg → JSON → schema) | 🟡 Medium | ✅ SOLVED — Blowfish decrypt+encrypt, full round-trip, universal level key |
+| 3 | **Level editor** (splines + object palette → re-encrypt) | 🟡 Medium | ✅ **beta** — viewer + drag-edit + save/export + themed render, device-verified; render fidelity community-refined |
+| 4 | **World 5 = Custom/Community Levels** (the delivery mechanism) | 🟡 Medium | 🚧 swap-into-slot works (proven); additive World-5 slot needs level-count RE |
+| 5 | **Procedural level generator** (random/seeded tracks) | 🟡 Medium | ✅ done — `levelgen.py` rolling-hills tracks, generate→encode→device-verified |
 | 6 | **ImGui mod menu** (in-game hub: live tuning) | 🟠 Med-Hard | ⬜ |
 | 7 | **Achievement tab** (revive the dead Google-Play achievements) | 🟡 Medium | ⬜ |
 
