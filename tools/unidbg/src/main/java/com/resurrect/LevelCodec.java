@@ -91,6 +91,21 @@ public class LevelCodec {
         long keyPtr = cbuf(key);  // raw char* (password is a char*, per the method type encoding)
         log("mode=" + mode + " key=" + key.length + "B  NSData=0x" + hex(CLS_NSDATA));
 
+        if (mode.equals("batch")) {
+            // BR_IN = manifest file, each line "inDat\toutRaw" — decrypt all in ONE JVM session
+            int ok = 0, fail = 0;
+            for (String line : Files.readAllLines(new File(in).toPath())) {
+                line = line.trim(); if (line.isEmpty()) continue;
+                String[] pp = line.split("\t");
+                try {
+                    byte[] raw = decrypt(Files.readAllBytes(new File(pp[0]).toPath()), keyPtr);
+                    if (raw != null && raw.length > 0) { write(pp[1], raw); ok++; }
+                    else { log("FAIL " + pp[0]); fail++; }
+                } catch (Throwable t) { log("ERR " + pp[0] + ": " + t); fail++; }
+            }
+            log("batch done: " + ok + " ok, " + fail + " failed");
+            emu.close(); return;
+        }
         if (mode.equals("decrypt")) {
             byte[] raw = decrypt(Files.readAllBytes(new File(in).toPath()), keyPtr);
             write(out, raw);
