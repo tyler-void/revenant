@@ -1,363 +1,477 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="unity-dark">
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>🗺️ Revenant Level Editor</title>
+<title>Revenant — Level Editor</title>
 <style>
+  /* ── palettes (grounded in Unity's editor grays / a neutral pro-light) ── */
+  :root[data-theme="unity-dark"]{
+    --app-toolbar-bg:#191919; --panel-bg:#383838; --panel-bg-alt:#2d2d2d; --viewport-bg:#282828;
+    --header-bg:#3c3c3c; --border:#232323; --border-strong:#1b1b1b; --input-border:#212121;
+    --text:#d2d2d2; --text-muted:#a0a0a0; --text-faint:#6e6e6e; --text-on-accent:#fff;
+    --field-bg:#2a2a2a; --field-bg-focus:#303030; --button-bg:#585858; --button-bg-hover:#676767; --button-bg-active:#46607c;
+    --accent:#4c7eff; --selection-bg:#2c5d87; --hover-bg:#ffffff14;
+    --axis-x:#e0584e; --axis-y:#6fbf4f; --grid-minor:#ffffff0d; --grid-major:#ffffff1a;
+    --terrain:#7fd07f; --sprite:#89b4fa; --trigger:#e6c763; --joint:#b69cf0; --marker:#e8a0c8;
+  }
+  :root[data-theme="pro-light"]{
+    --app-toolbar-bg:#e8e8e8; --panel-bg:#f3f3f3; --panel-bg-alt:#ececec; --viewport-bg:#cfcfcf;
+    --header-bg:#e0e0e0; --border:#c8c8c8; --border-strong:#b0b0b0; --input-border:#bfbfbf;
+    --text:#1f1f1f; --text-muted:#5a5a5a; --text-faint:#8a8a8a; --text-on-accent:#fff;
+    --field-bg:#fff; --field-bg-focus:#fff; --button-bg:#e2e2e2; --button-bg-hover:#d6d6d6; --button-bg-active:#c4d9f2;
+    --accent:#2563eb; --selection-bg:#cfe2ff; --hover-bg:#00000008;
+    --axis-x:#d43a2f; --axis-y:#2fa049; --grid-minor:#00000010; --grid-major:#0000001f;
+    --terrain:#3a8f3a; --sprite:#2563eb; --trigger:#b88a16; --joint:#7a52c8; --marker:#c43d8f;
+  }
   :root{
-    --bg:#1e1e2e; --mantle:#181825; --crust:#11111b; --surface:#313244; --surface2:#45475a;
-    --text:#cdd6f4; --sub:#a6adc8; --blue:#89b4fa; --green:#a6e3a1; --yellow:#f9e2af;
-    --peach:#fab387; --mauve:#cba6f7; --red:#f38ba8; --teal:#94e2d5; --pink:#f5c2e7;
+    --font-ui:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+    --font-mono:"SF Mono","Cascadia Mono","JetBrains Mono",Consolas,monospace;
+    --fs-base:12px; --fs-small:11px; --row-h:22px; --toolbar-h:40px; --statusbar-h:24px;
+    --radius:3px; --icon:16px; --left-w:288px; --right-w:300px;
   }
   *{box-sizing:border-box}
-  html,body{margin:0;height:100%}
-  body{font:13px/1.5 ui-monospace,'JetBrains Mono',Menlo,monospace;background:var(--bg);color:var(--text);overflow:hidden}
-  header{padding:8px 14px;background:var(--crust);border-bottom:1px solid var(--surface);display:flex;align-items:center;gap:14px;flex-wrap:wrap}
-  header h1{margin:0;font-size:15px;white-space:nowrap}
-  header select,header input{background:var(--surface);color:var(--text);border:1px solid var(--surface2);border-radius:6px;padding:4px 7px;font:inherit}
-  header input[type=number]{width:62px}
-  .medals{color:var(--sub);font-size:12px;display:flex;align-items:center;gap:4px}
-  .medals input{width:58px}
-  .spacer{flex:1}
-  button{background:var(--surface);color:var(--text);border:1px solid var(--surface2);border-radius:6px;padding:5px 11px;font:inherit;cursor:pointer}
-  button:hover{background:var(--surface2)}
-  button.primary{background:var(--green);color:#11111b;border:0;font-weight:700}
-  button.accent{background:var(--mauve);color:#11111b;border:0;font-weight:700}
+  html,body{margin:0;height:100%;overflow:hidden}
+  body{font:var(--fs-base)/1.45 var(--font-ui);background:var(--viewport-bg);color:var(--text);
+    user-select:none;-webkit-user-select:none}
+  .mono{font-family:var(--font-mono)}
+  button{font:inherit;color:var(--text);background:var(--button-bg);border:1px solid var(--border);
+    border-radius:var(--radius);padding:3px 9px;cursor:pointer}
+  button:hover{background:var(--button-bg-hover)}
   button:disabled{opacity:.45;cursor:default}
-  #status{font-size:12px;color:var(--sub);min-width:90px}
-  #status.ok{color:var(--green)} #status.err{color:var(--red)} #status.busy{color:var(--yellow)}
-  #status.dirty{color:var(--peach)}
-  .wrap{display:flex;height:calc(100vh - 47px)}
-  .side{width:218px;background:var(--mantle);border-right:1px solid var(--surface);padding:10px;overflow:auto;flex:none}
-  .side h3{margin:6px 0 4px;color:var(--peach);font-size:11px;text-transform:uppercase;letter-spacing:.05em}
-  .layer{display:flex;align-items:center;gap:8px;padding:3px 4px;border-radius:6px;cursor:pointer}
-  .layer:hover{background:var(--surface)}
-  .layer .sw{width:12px;height:12px;border-radius:3px;flex:none}
-  .layer .ct{margin-left:auto;color:var(--sub);font-size:11px}
-  .layer input{accent-color:var(--mauve)}
-  .stage{flex:1;position:relative;overflow:hidden}
-  canvas{display:block;width:100%;height:100%;cursor:grab}
-  canvas.drag{cursor:grabbing}
-  .hud{position:absolute;left:10px;bottom:10px;background:rgba(17,17,27,.8);border:1px solid var(--surface);border-radius:6px;padding:6px 10px;color:var(--sub);font-size:11px;pointer-events:none}
-  .help{position:absolute;right:10px;bottom:10px;background:rgba(17,17,27,.8);border:1px solid var(--surface);border-radius:6px;padding:6px 10px;color:var(--sub);font-size:11px;pointer-events:none;text-align:right}
-  .insp{width:296px;background:var(--mantle);border-left:1px solid var(--surface);padding:10px;overflow:auto;flex:none}
-  .insp h3{margin:0 0 4px;color:var(--teal);font-size:13px}
-  .insp .ty{color:var(--peach);font-weight:700}
-  .insp .meta{color:var(--sub);font-size:11px;margin-bottom:6px}
-  .row{display:flex;align-items:center;gap:6px;padding:2px 0;border-bottom:1px solid var(--surface)}
-  .row .k{color:var(--sub);flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:11.5px}
-  .row input[type=text],.row input[type=number]{width:128px;background:var(--surface);color:var(--green);border:1px solid var(--surface2);border-radius:5px;padding:2px 5px;font:inherit;font-size:11.5px}
-  .row input[type=checkbox]{accent-color:var(--green)}
-  .row .ro{color:var(--sub);font-size:11px;max-width:140px;word-break:break-word;text-align:right}
-  .empty{color:var(--sub)}
-  .delbar{margin-top:10px}
-  .delbar button{background:var(--red);color:#11111b;border:0;font-weight:700}
-  code{color:var(--peach)}
+  button.tool{background:transparent;border:1px solid transparent;width:28px;height:26px;padding:0;font-size:14px}
+  button.tool:hover{background:var(--hover-bg)}
+  button.tool.on{background:var(--button-bg-active);border-color:var(--accent);color:#fff}
+  input,select{font:inherit;color:var(--text);background:var(--field-bg);border:1px solid var(--input-border);
+    border-radius:var(--radius);padding:2px 5px}
+  input:focus,select:focus{outline:1px solid var(--accent);background:var(--field-bg-focus)}
+
+  /* app shell */
+  .app{display:grid;height:100vh;
+    grid-template-columns:var(--left-w) 4px 1fr 4px var(--right-w);
+    grid-template-rows:var(--toolbar-h) 1fr var(--statusbar-h);
+    grid-template-areas:"toolbar toolbar toolbar toolbar toolbar" "left ls viewport rs right" "status status status status status";}
+  .toolbar{grid-area:toolbar;background:var(--app-toolbar-bg);border-bottom:1px solid var(--border-strong);
+    display:flex;align-items:center;gap:6px;padding:0 10px}
+  .toolbar .brand{font-weight:600;font-size:13px;letter-spacing:.02em;margin-right:6px}
+  .toolbar .sep{width:1px;height:22px;background:var(--border);margin:0 4px}
+  .toolbar .grow{flex:1}
+  .toolbar .lvl{font-size:var(--fs-small);color:var(--text-muted)}
+  .left{grid-area:left} .right{grid-area:right}
+  .left,.right{background:var(--panel-bg);overflow:hidden;display:flex;flex-direction:column}
+  .left{border-right:1px solid var(--border-strong)} .right{border-left:1px solid var(--border-strong)}
+  .splitter{background:var(--border-strong);cursor:col-resize} .splitter.ls{grid-area:ls} .splitter.rs{grid-area:rs}
+  .splitter:hover{background:var(--accent)}
+  .viewport{grid-area:viewport;position:relative;background:var(--viewport-bg);overflow:hidden}
+  .status{grid-area:status;background:var(--app-toolbar-bg);border-top:1px solid var(--border-strong);
+    display:flex;align-items:center;gap:16px;padding:0 12px;font-size:var(--fs-small);color:var(--text-muted)}
+  .status .mono{color:var(--text)}
+
+  /* panel chrome */
+  .ptitle{height:26px;display:flex;align-items:center;padding:0 10px;background:var(--header-bg);
+    border-bottom:1px solid var(--border);font-size:var(--fs-small);font-weight:600;
+    text-transform:uppercase;letter-spacing:.04em;color:var(--text-muted);flex:none}
+  .psearch{padding:6px;flex:none;border-bottom:1px solid var(--border)}
+  .psearch input{width:100%}
+  .pscroll{overflow:auto;flex:1}
+
+  /* hierarchy */
+  .grp{}
+  .grp>.ghead{display:flex;align-items:center;height:var(--row-h);padding:0 6px;cursor:pointer;color:var(--text);font-weight:600}
+  .grp>.ghead:hover{background:var(--hover-bg)}
+  .grp>.ghead .tri{width:12px;color:var(--text-faint);font-size:9px}
+  .grp>.ghead .gname{margin-left:2px}
+  .grp>.ghead .gcount{margin-left:auto;color:var(--text-faint);font-size:var(--fs-small);font-weight:400}
+  .row{display:flex;align-items:center;height:var(--row-h);padding:0 6px 0 20px;cursor:pointer;white-space:nowrap}
+  .row:hover{background:var(--hover-bg)}
+  .row.sel{background:var(--selection-bg);color:#fff}
+  .row .ico{width:16px;text-align:center;color:var(--text-muted);flex:none}
+  .row.sel .ico{color:#fff}
+  .row .nm{margin-left:5px;overflow:hidden;text-overflow:ellipsis}
+  .row.hidden .nm{color:var(--text-faint);font-style:italic}
+  .row .eye{margin-left:auto;width:18px;text-align:center;color:var(--text-faint);visibility:hidden}
+  .row:hover .eye,.row.hidden .eye{visibility:visible}
+
+  /* inspector */
+  .insp-empty{padding:16px;color:var(--text-faint);text-align:center}
+  .fold{border-bottom:1px solid var(--border)}
+  .fold>.fhead{display:flex;align-items:center;height:24px;padding:0 8px;cursor:pointer;background:var(--panel-bg-alt);
+    font-size:var(--fs-small);font-weight:600;text-transform:uppercase;letter-spacing:.03em;color:var(--text-muted)}
+  .fold>.fhead .tri{width:12px;color:var(--text-faint);font-size:9px}
+  .fbody{padding:4px 8px 8px}
+  .f{display:flex;align-items:center;min-height:22px;gap:6px}
+  .f label{flex:0 0 42%;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .f label.scrub{cursor:ew-resize}
+  .f label.scrub:hover{color:var(--accent)}
+  .f .ctl{flex:1;display:flex;gap:4px;align-items:center}
+  .f input[type=number],.f input[type=text]{width:100%;font-family:var(--font-mono);font-size:var(--fs-small);text-align:right}
+  .f input[type=text]{text-align:left}
+  .f .axis{flex:0 0 auto;font-family:var(--font-mono);font-size:10px;color:var(--text-faint);width:9px;text-align:center}
+  .f .axis.x{color:var(--axis-x)} .f .axis.y{color:var(--axis-y)}
+  .f input[type=range]{flex:1;accent-color:var(--accent)}
+  .f .rv{flex:0 0 46px;text-align:right;font-family:var(--font-mono);font-size:var(--fs-small);color:var(--text)}
+  .f .ro{flex:1;text-align:right;color:var(--text-muted);font-family:var(--font-mono);font-size:var(--fs-small);word-break:break-all}
+  .typechip{display:inline-block;padding:1px 7px;border-radius:9px;background:var(--button-bg-active);color:#fff;font-size:10px}
+  .thumb{width:100%;height:64px;background:var(--viewport-bg) center/contain no-repeat;border:1px solid var(--border);border-radius:var(--radius);margin-bottom:4px;image-rendering:auto}
+  .delrow{padding:8px}
+  .delrow button{width:100%;background:#7a2f33;border-color:#933;color:#fdd}
+  .delrow button:hover{background:#933}
+  .hud{position:absolute;left:8px;bottom:8px;background:#0009;border:1px solid var(--border);border-radius:var(--radius);
+    padding:3px 8px;font-family:var(--font-mono);font-size:10px;color:var(--text-muted);pointer-events:none}
+  #status .seg{display:flex;align-items:center;gap:5px}
+  #key{width:150px}
+  #stat{margin-left:auto}
+  #stat.ok{color:var(--axis-y)} #stat.err{color:var(--axis-x)} #stat.busy{color:var(--trigger)} #stat.dirty{color:var(--accent)}
 </style>
 </head>
 <body>
-<header>
-  <h1>🗺️ Revenant Editor</h1>
-  <select id="lvlSel" title="level"></select>
-  <span class="medals" title="medal times (gold/silver/bronze)">🥇<input type="number" id="t0" step="0.1">🥈<input type="number" id="t1" step="0.1">🥉<input type="number" id="t2" step="0.1"></span>
-  <span class="spacer"></span>
-  <input type="password" id="key" placeholder="per-level key (hex)" size="20" title="needed only to Export; stored locally, never committed">
-  <button class="primary" id="saveBtn" onclick="save()" disabled>Save</button>
-  <button class="accent" id="exportBtn" onclick="exportDat()">Export .dat</button>
-  <span id="status">ready</span>
-</header>
-<div class="wrap">
-  <div class="side">
-    <h3>Layers</h3>
-    <div id="layers"></div>
-    <h3 style="margin-top:12px">View</h3>
-    <div style="display:flex;gap:6px;flex-wrap:wrap">
-      <button onclick="fitToView();draw()">⤢ Fit</button>
-      <button onclick="toggleLabels()">🏷 Labels</button>
-    </div>
-    <h3 style="margin-top:12px">Edit</h3>
-    <div id="legend" style="font-size:11px;color:var(--sub)"></div>
+<div class="app">
+  <!-- ── toolbar ── -->
+  <div class="toolbar">
+    <span class="brand">🜂 Revenant</span>
+    <select id="lvlSel" title="open level"></select>
+    <span class="sep"></span>
+    <button class="tool" id="tSelect" title="Select (Q)" onclick="setTool('select')">⮰</button>
+    <button class="tool" id="tMove" title="Move (W)" onclick="setTool('move')">✥</button>
+    <button class="tool" id="tRotate" title="Rotate (E)" onclick="setTool('rotate')">↻</button>
+    <button class="tool" id="tPan" title="Pan (Space)" onclick="setTool('pan')">✋</button>
+    <span class="sep"></span>
+    <button class="tool" id="bGrid" title="Toggle grid" onclick="toggleGrid()">▦</button>
+    <button class="tool" id="bSnap" title="Grid snap" onclick="toggleSnap()">⊞</button>
+    <button class="tool" id="bArt" title="Toggle sprite art" onclick="toggleArt()">🖼</button>
+    <button class="tool" id="bFit" title="Frame all (A)" onclick="frameAll()">⤢</button>
+    <span class="grow"></span>
+    <input id="key" type="password" placeholder="level key (hex)" title="needed to Export; stored locally, never committed">
+    <button id="saveBtn" onclick="save()" disabled>Save</button>
+    <button id="exportBtn" onclick="exportDat()">Export .dat</button>
+    <span class="sep"></span>
+    <button class="tool" id="bTheme" title="Toggle theme" onclick="toggleTheme()">◐</button>
   </div>
-  <div class="stage">
+
+  <!-- ── hierarchy ── -->
+  <div class="left">
+    <div class="ptitle">Hierarchy</div>
+    <div class="psearch"><input id="filter" placeholder="filter…  (try t:sprite)" oninput="renderTree()"></div>
+    <div class="pscroll" id="tree"></div>
+  </div>
+  <div class="splitter ls" id="lsplit"></div>
+
+  <!-- ── viewport ── -->
+  <div class="viewport">
     <canvas id="cv"></canvas>
     <div class="hud" id="hud"></div>
-    <div class="help">drag handle = reshape · drag body = move<br>click = select · drag empty = pan · wheel = zoom</div>
   </div>
-  <div class="insp">
-    <h3>Inspector</h3>
-    <div id="inspBody"><p class="empty">Click an entity to select. Drag its handles to reshape, drag its body to move.</p></div>
+  <div class="splitter rs" id="rsplit"></div>
+
+  <!-- ── inspector ── -->
+  <div class="right">
+    <div class="ptitle">Inspector</div>
+    <div class="pscroll" id="insp"><div class="insp-empty">No selection</div></div>
+  </div>
+
+  <!-- ── status bar ── -->
+  <div class="status" id="status">
+    <span class="seg">📐 <span class="mono" id="sCur">0, 0</span></span>
+    <span class="seg">🔍 <span class="mono" id="sZoom">100%</span></span>
+    <span class="seg" id="sCount">0 entities</span>
+    <span class="seg" id="sSel">—</span>
+    <span class="seg" id="stat">ready</span>
   </div>
 </div>
 <script>
 const $=s=>document.querySelector(s);
 const cv=$('#cv'), ctx=cv.getContext('2d');
 
-const LAYERS = {
-  terrain:  {label:'Terrain (physics)', color:'#a6e3a1', on:true},
-  sprites:  {label:'Sprites',           color:'#89b4fa', on:true},
-  triggers: {label:'Triggers',          color:'#f9e2af', on:true},
-  joints:   {label:'Joints',            color:'#cba6f7', on:true},
-  markers:  {label:'Start / Win / Cam', color:'#f5c2e7', on:true},
+// ── type metadata ────────────────────────────────────────────────────────────
+const TYPEMETA={
+  EditorPhysicsObject:{group:'Terrain',icon:'◢'}, EditorPhysicsEntity:{group:'Terrain',icon:'▣'},
+  EditorSprite:{group:'Sprites',icon:'▦'}, ComposedSprite:{group:'Sprites',icon:'▤'},
+  Moto:{group:'Gameplay',icon:'⚑'}, TriggerWin:{group:'Gameplay',icon:'🏁'}, ExplosiveBarrel:{group:'Gameplay',icon:'💥'},
+  EditorTrigger:{group:'Triggers',icon:'▸'}, WaterTrigger:{group:'Triggers',icon:'≈'},
+  EditorCamera:{group:'Cameras',icon:'🎥'},
 };
-let LID=null, LEVEL=null, ENTS=[], showLabels=false, selected=null, dirty=false, KEYS={};
-let view={x:0,y:0,scale:1};
+const GROUP_ORDER=['Gameplay','Terrain','Sprites','Triggers','Joints','Cameras','Misc'];
+const BIG_GROUPS=new Set(['Terrain','Sprites']);   // collapsed by default
+function metaFor(t){ if(TYPEMETA[t])return TYPEMETA[t]; if(t&&t.indexOf('Joint')>=0)return{group:'Joints',icon:'⛓'}; return{group:'Misc',icon:'◇'}; }
+function groupOf(e){return metaFor(e.Type).group;}
+function nameOf(e){const n=(e.Properties||{}).name; return (n&&String(n).trim())?n:`${e.Type} #${e._id}`;}
 
-function layerOf(t){
-  if(t==='EditorPhysicsObject'||t==='EditorPhysicsEntity') return 'terrain';
-  if(t==='EditorSprite'||t==='ComposedSprite') return 'sprites';
-  if(t==='EditorTrigger'||t==='WaterTrigger') return 'triggers';
-  if(t&&t.indexOf('Joint')>=0) return 'joints';
-  return 'markers';
-}
-function posOf(p){
-  const P=p.Properties||{};
-  if(Array.isArray(P.position)&&P.position.length===2) return {x:P.position[0],y:P.position[1]};
-  if(p.Vertexes&&p.Vertexes.length){let sx=0,sy=0;p.Vertexes.forEach(v=>{sx+=v.x;sy+=v.y});return{x:sx/p.Vertexes.length,y:sy/p.Vertexes.length};}
-  if(Array.isArray(p.Anchors)&&p.Anchors.length) return {x:p.Anchors[0].x,y:p.Anchors[0].y};
-  return null;
-}
-// translate a whole entity by a world delta
-function translate(e,dwx,dwy){
-  if(e.Vertexes) e.Vertexes.forEach(v=>{v.x+=dwx;v.y+=dwy;});
-  const P=e.Properties||{};
-  if(Array.isArray(P.position)){P.position[0]+=dwx;P.position[1]+=dwy;}
-  if(Array.isArray(e.Anchors)) e.Anchors.forEach(a=>{a.x+=dwx;a.y+=dwy;});
-}
+// ── state ────────────────────────────────────────────────────────────────────
+let LID=null,LEVEL=null,ENTS=[],selected=null,dirty=false;
+let view={x:0,y:0,scale:1}, tool='select';
+let showGrid=true, snap=false, snapStep=20, showArt=true;
+let hidden=new Set(), collapsed=new Set(BIG_GROUPS), foldOpen={Transform:true,Identity:true,Physics:true,Appearance:true,'Type-specific':true,Vertexes:true};
+let KEYS={}, FRAMES={}, ATLAS={};   // atlas frame meta + Image objects
+const LS=k=>'rvedit_'+k;
 
-function s2w(sx,sy){return{x:view.x+(sx-cv.width/2)/view.scale, y:view.y-(sy-cv.height/2)/view.scale};}
+// ── coords ───────────────────────────────────────────────────────────────────
+function s2w(sx,sy){return{x:view.x+(sx-cv.width/2)/view.scale,y:view.y-(sy-cv.height/2)/view.scale};}
 function wx(x){return cv.width/2+(x-view.x)*view.scale;}
 function wy(y){return cv.height/2-(y-view.y)*view.scale;}
-function bounds(){
-  let mnx=1e9,mny=1e9,mxx=-1e9,mxy=-1e9,any=false;
-  const acc=(x,y)=>{any=true;if(x<mnx)mnx=x;if(y<mny)mny=y;if(x>mxx)mxx=x;if(y>mxy)mxy=y;};
-  ENTS.forEach(e=>{(e.Vertexes||[]).forEach(v=>acc(v.x,v.y));const pt=posOf(e);if(pt)acc(pt.x,pt.y);(e.Anchors||[]).forEach(a=>acc(a.x,a.y));});
-  if(!any) return {mnx:-100,mny:-100,mxx:100,mxy:100};
-  return {mnx,mny,mxx,mxy};
-}
-function fitToView(){
-  const b=bounds(),W=cv.width,H=cv.height;
-  const spanx=Math.max(b.mxx-b.mnx,1),spany=Math.max(b.mxy-b.mny,1);
-  view.scale=Math.min(W/spanx,H/spany)*0.92; view.x=(b.mnx+b.mxx)/2; view.y=(b.mny+b.mxy)/2;
-}
-function catmull(pts,closed){
-  if(pts.length<3) return pts.slice();
-  const out=[],n=pts.length;
-  const get=i=>closed?pts[(i%n+n)%n]:pts[Math.max(0,Math.min(n-1,i))];
-  const last=closed?n:n-1;
-  for(let i=0;i<last;i++){
-    const p0=get(i-1),p1=get(i),p2=get(i+1),p3=get(i+2);
-    const seg=Math.max(1,Math.round((pts[i].segments)||4));
-    for(let j=0;j<seg;j++){const t=j/seg,t2=t*t,t3=t2*t;
-      out.push({x:0.5*((2*p1.x)+(-p0.x+p2.x)*t+(2*p0.x-5*p1.x+4*p2.x-p3.x)*t2+(-p0.x+3*p1.x-3*p2.x+p3.x)*t3),
-                y:0.5*((2*p1.y)+(-p0.y+p2.y)*t+(2*p0.y-5*p1.y+4*p2.y-p3.y)*t2+(-p0.y+3*p1.y-3*p2.y+p3.y)*t3)});}
-  }
-  if(!closed) out.push(pts[n-1]); return out;
-}
-function outline(e){
-  const vs=e.Vertexes||[]; if(vs.length<2) return null;
-  return (e.Properties&&e.Properties.spline)?catmull(vs,true):vs.map(v=>({x:v.x,y:v.y}));
-}
+function posOf(e){const P=e.Properties||{};
+  if(Array.isArray(P.position)&&P.position.length===2)return{x:P.position[0],y:P.position[1]};
+  if(e.Vertexes&&e.Vertexes.length){let sx=0,sy=0;e.Vertexes.forEach(v=>{sx+=v.x;sy+=v.y});return{x:sx/e.Vertexes.length,y:sy/e.Vertexes.length};}
+  if(Array.isArray(e.Anchors)&&e.Anchors.length)return{x:e.Anchors[0].x,y:e.Anchors[0].y};
+  return null;}
+function translate(e,dx,dy){
+  if(e.Vertexes)e.Vertexes.forEach(v=>{v.x+=dx;v.y+=dy;});
+  const P=e.Properties||{}; if(Array.isArray(P.position)){P.position[0]+=dx;P.position[1]+=dy;}
+  if(Array.isArray(e.Anchors))e.Anchors.forEach(a=>{a.x+=dx;a.y+=dy;});}
+function entBounds(e){let mnx=1e9,mny=1e9,mxx=-1e9,mxy=-1e9,any=false;const acc=(x,y)=>{any=true;mnx=Math.min(mnx,x);mny=Math.min(mny,y);mxx=Math.max(mxx,x);mxy=Math.max(mxy,y);};
+  (e.Vertexes||[]).forEach(v=>acc(v.x,v.y)); const pt=posOf(e); if(pt&&!e.Vertexes)acc(pt.x,pt.y); (e.Anchors||[]).forEach(a=>acc(a.x,a.y));
+  if(!any){const p=posOf(e)||{x:0,y:0};return{mnx:p.x-20,mny:p.y-20,mxx:p.x+20,mxy:p.y+20};} return{mnx,mny,mxx,mxy};}
+function sceneBounds(){let b={mnx:1e9,mny:1e9,mxx:-1e9,mxy:-1e9},any=false;ENTS.forEach(e=>{const eb=entBounds(e);any=true;b.mnx=Math.min(b.mnx,eb.mnx);b.mny=Math.min(b.mny,eb.mny);b.mxx=Math.max(b.mxx,eb.mxx);b.mxy=Math.max(b.mxy,eb.mxy);});return any?b:{mnx:-100,mny:-100,mxx:100,mxy:100};}
+function frameBounds(b,pad=0.9){const W=cv.width,H=cv.height;const sx=Math.max(b.mxx-b.mnx,1),sy=Math.max(b.mxy-b.mny,1);view.scale=Math.min(W/sx,H/sy)*pad;view.x=(b.mnx+b.mxx)/2;view.y=(b.mny+b.mxy)/2;}
+function frameAll(){frameBounds(sceneBounds());draw();}
+function frameSel(){if(selected){frameBounds(entBounds(selected),0.55);draw();}}
 
+// ── Catmull-Rom + outline ─────────────────────────────────────────────────────
+function catmull(pts,closed){if(pts.length<3)return pts.slice();const out=[],n=pts.length;
+  const get=i=>closed?pts[(i%n+n)%n]:pts[Math.max(0,Math.min(n-1,i))];const last=closed?n:n-1;
+  for(let i=0;i<last;i++){const p0=get(i-1),p1=get(i),p2=get(i+1),p3=get(i+2);const seg=Math.max(1,Math.round((pts[i].segments)||4));
+    for(let j=0;j<seg;j++){const t=j/seg,t2=t*t,t3=t2*t;out.push({x:0.5*((2*p1.x)+(-p0.x+p2.x)*t+(2*p0.x-5*p1.x+4*p2.x-p3.x)*t2+(-p0.x+3*p1.x-3*p2.x+p3.x)*t3),y:0.5*((2*p1.y)+(-p0.y+p2.y)*t+(2*p0.y-5*p1.y+4*p2.y-p3.y)*t2+(-p0.y+3*p1.y-3*p2.y+p3.y)*t3)});}}
+  if(!closed)out.push(pts[n-1]);return out;}
+function outline(e){const vs=e.Vertexes||[];if(vs.length<2)return null;return(e.Properties&&e.Properties.spline)?catmull(vs,true):vs.map(v=>({x:v.x,y:v.y}));}
+
+// ── render ────────────────────────────────────────────────────────────────────
+function css(v){return getComputedStyle(document.documentElement).getPropertyValue(v).trim();}
 function draw(){
-  const W=cv.width,H=cv.height;
-  ctx.fillStyle='#181825'; ctx.fillRect(0,0,W,H); drawGrid();
-  if(LAYERS.terrain.on) ENTS.forEach(e=>{if(layerOf(e.Type)==='terrain')drawPhysics(e);});
-  if(LAYERS.joints.on) ENTS.forEach(e=>{if(layerOf(e.Type)==='joints')drawJoint(e);});
-  if(LAYERS.triggers.on) ENTS.forEach(e=>{if(layerOf(e.Type)==='triggers')drawTrigger(e);});
-  if(LAYERS.sprites.on) ENTS.forEach(e=>{if(layerOf(e.Type)==='sprites')drawSprite(e);});
-  if(LAYERS.markers.on) ENTS.forEach(e=>{if(layerOf(e.Type)==='markers')drawMarker(e);});
-  if(selected) drawSelected(selected);
+  const W=cv.width,H=cv.height; ctx.clearRect(0,0,W,H);
+  ctx.fillStyle=css('--viewport-bg'); ctx.fillRect(0,0,W,H);
+  if(showGrid)drawGrid();
+  // sprites (real art) sorted by z, behind terrain
+  if(showArt) ENTS.filter(e=>!hidden.has(e._id)&&metaFor(e.Type).group==='Sprites').sort((a,b)=>((a.Properties||{}).z||0)-((b.Properties||{}).z||0)).forEach(drawSprite);
+  ENTS.forEach(e=>{ if(hidden.has(e._id))return; const g=metaFor(e.Type).group;
+    if(g==='Terrain')drawTerrain(e); else if(g==='Triggers')drawTrigger(e); else if(g==='Joints')drawJoint(e);
+    else if(g==='Gameplay'||g==='Cameras'||g==='Misc')drawMarker(e);
+    else if(g==='Sprites'&&!showArt)drawSpriteDot(e); });
+  if(selected)drawGizmo(selected);
 }
-function drawGrid(){
-  const b=s2w(0,0),e=s2w(cv.width,cv.height);
-  let step=Math.pow(10,Math.floor(Math.log10((e.x-b.x)/10))); if(!isFinite(step)||step<=0)step=100;
-  ctx.lineWidth=1; ctx.strokeStyle='rgba(69,71,90,.35)';
-  for(let x=Math.ceil(b.x/step)*step;x<e.x;x+=step){const sx=wx(x);ctx.beginPath();ctx.moveTo(sx,0);ctx.lineTo(sx,cv.height);ctx.stroke();}
-  for(let y=Math.floor(b.y/step)*step;y<e.y;y+=step){const sy=wy(y);ctx.beginPath();ctx.moveTo(0,sy);ctx.lineTo(cv.width,sy);ctx.stroke();}
-  ctx.strokeStyle='rgba(137,180,250,.25)';
-  ctx.beginPath();ctx.moveTo(wx(0),0);ctx.lineTo(wx(0),cv.height);ctx.moveTo(0,wy(0));ctx.lineTo(cv.width,wy(0));ctx.stroke();
-}
-function drawPhysics(e){
-  if(e.Type==='EditorPhysicsEntity') return drawMarker(e);
-  const poly=outline(e); if(!poly) return;
-  ctx.beginPath(); poly.forEach((p,i)=>i?ctx.lineTo(wx(p.x),wy(p.y)):ctx.moveTo(wx(p.x),wy(p.y))); ctx.closePath();
-  ctx.fillStyle='rgba(166,227,161,.10)'; ctx.fill(); ctx.lineWidth=1.5; ctx.strokeStyle='#a6e3a1'; ctx.stroke();
-}
-function drawSprite(e){
-  const pt=posOf(e); if(!pt)return; const sx=wx(pt.x),sy=wy(pt.y);
-  ctx.fillStyle='rgba(137,180,250,.9)'; ctx.beginPath(); ctx.arc(sx,sy,2.5,0,7); ctx.fill();
-  if(showLabels){const f=(e.Properties&&(e.Properties.frame||e.Properties.name))||'';if(f){ctx.fillStyle='#6c7086';ctx.font='9px monospace';ctx.fillText(f,sx+4,sy-3);}}
-}
-function drawTrigger(e){
-  const pt=posOf(e); if(!pt)return; const sx=wx(pt.x),sy=wy(pt.y);
-  const r=(e.Properties&&e.Properties.radius)||0;
-  ctx.strokeStyle='rgba(249,226,175,.8)'; ctx.lineWidth=1.5; ctx.setLineDash([4,3]);
-  ctx.beginPath(); ctx.arc(sx,sy,Math.max(4,r*view.scale),0,7); ctx.stroke(); ctx.setLineDash([]);
-  ctx.fillStyle='#f9e2af'; ctx.beginPath(); ctx.arc(sx,sy,2,0,7); ctx.fill();
-}
-function drawJoint(e){
-  const a=e.Anchors||[]; if(!a.length)return; ctx.strokeStyle='#cba6f7'; ctx.lineWidth=1.5;
+function drawGrid(){const b=s2w(0,0),e=s2w(cv.width,cv.height);
+  let step=Math.pow(10,Math.floor(Math.log10((e.x-b.x)/10)));if(!isFinite(step)||step<=0)step=100;
+  const draw1=(st,col)=>{ctx.strokeStyle=col;ctx.lineWidth=1;ctx.beginPath();
+    for(let x=Math.ceil(b.x/st)*st;x<e.x;x+=st){ctx.moveTo(wx(x),0);ctx.lineTo(wx(x),cv.height);}
+    for(let y=Math.floor(b.y/st)*st;y<e.y;y+=st){ctx.moveTo(0,wy(y));ctx.lineTo(cv.width,wy(y));}ctx.stroke();};
+  draw1(step,css('--grid-minor')); draw1(step*5,css('--grid-major'));}
+function drawSprite(e){const P=e.Properties||{},pt=posOf(e);if(!pt)return;const fm=FRAMES[P.frame],img=fm&&ATLAS[fm.atlas];
+  if(!fm||!img||!img.complete||!img.naturalWidth){return drawSpriteDot(e);}
+  const [rx,ry,rw,rh]=fm.rect; let sw=fm.source[0]||rw, sh=fm.source[1]||rh;
+  const scl=(P.scale||1)*view.scale, dw=sw*scl, dh=sh*scl;
+  ctx.save(); ctx.translate(wx(pt.x),wy(pt.y)); ctx.rotate((P.rotation||0)*Math.PI/180);
+  if(Array.isArray(P.color)&&P.color.length>=3){/* tint hint via alpha only */}
+  ctx.globalAlpha=(P.opacity!=null?P.opacity:1);
+  if(fm.rotated){ ctx.rotate(Math.PI/2); ctx.drawImage(img,rx,ry,rw,rh,-dh/2,-dw/2,dh,dw); }
+  else { ctx.drawImage(img,rx,ry,rw,rh,-dw/2,-dh/2,dw,dh); }
+  ctx.restore();}
+function drawSpriteDot(e){const pt=posOf(e);if(!pt)return;ctx.fillStyle=css('--sprite');ctx.beginPath();ctx.arc(wx(pt.x),wy(pt.y),2.5,0,7);ctx.fill();}
+function drawTerrain(e){if(e.Type==='EditorPhysicsEntity')return drawMarker(e);const poly=outline(e);if(!poly)return;
+  ctx.beginPath();poly.forEach((p,i)=>i?ctx.lineTo(wx(p.x),wy(p.y)):ctx.moveTo(wx(p.x),wy(p.y)));ctx.closePath();
+  ctx.fillStyle=css('--terrain')+'22';ctx.fill();ctx.lineWidth=1.4;ctx.strokeStyle=css('--terrain');ctx.stroke();}
+function drawTrigger(e){const pt=posOf(e);if(!pt)return;const sx=wx(pt.x),sy=wy(pt.y),r=(e.Properties||{}).radius||0;
+  ctx.strokeStyle=css('--trigger');ctx.lineWidth=1.3;ctx.setLineDash([4,3]);ctx.beginPath();ctx.arc(sx,sy,Math.max(4,r*view.scale),0,7);ctx.stroke();ctx.setLineDash([]);
+  ctx.fillStyle=css('--trigger');ctx.beginPath();ctx.arc(sx,sy,2,0,7);ctx.fill();}
+function drawJoint(e){const a=e.Anchors||[];if(!a.length)return;ctx.strokeStyle=css('--joint');ctx.lineWidth=1.3;
   if(a.length>=2){ctx.beginPath();ctx.moveTo(wx(a[0].x),wy(a[0].y));ctx.lineTo(wx(a[1].x),wy(a[1].y));ctx.stroke();}
-  a.forEach(an=>{const sx=wx(an.x),sy=wy(an.y);ctx.beginPath();ctx.moveTo(sx-3,sy-3);ctx.lineTo(sx+3,sy+3);ctx.moveTo(sx+3,sy-3);ctx.lineTo(sx-3,sy+3);ctx.stroke();});
-}
-function drawMarker(e){
-  const pt=posOf(e); if(!pt)return; const sx=wx(pt.x),sy=wy(pt.y);
-  let c='#f5c2e7',g='◆',label='';
-  if(e.Type==='Moto'){c='#a6e3a1';g='🏍';label='START';}
-  else if(e.Type==='TriggerWin'){c='#f38ba8';g='🏁';label='WIN';}
-  else if(e.Type==='EditorCamera'){c='#94e2d5';g='🎥';label='CAM';}
-  else if(e.Type==='ExplosiveBarrel'){c='#fab387';g='💥';}
-  else if(e.Type==='EditorPhysicsEntity'){c='#a6e3a1';g='▣';}
-  ctx.font='15px monospace';ctx.textAlign='center';ctx.textBaseline='middle';
-  ctx.fillText(g,sx,sy);ctx.textAlign='left';ctx.textBaseline='alphabetic';
-  if(label){ctx.fillStyle=c;ctx.font='bold 10px monospace';ctx.fillText(label,sx+10,sy-6);}
-}
-function drawSelected(e){
-  const pt=posOf(e); if(!pt)return; const sx=wx(pt.x),sy=wy(pt.y);
-  ctx.strokeStyle='#f5c2e7'; ctx.lineWidth=2;
+  a.forEach(an=>{const sx=wx(an.x),sy=wy(an.y);ctx.beginPath();ctx.moveTo(sx-3,sy-3);ctx.lineTo(sx+3,sy+3);ctx.moveTo(sx+3,sy-3);ctx.lineTo(sx-3,sy+3);ctx.stroke();});}
+function drawMarker(e){const pt=posOf(e);if(!pt)return;const sx=wx(pt.x),sy=wy(pt.y);
+  let g='◆',label='';if(e.Type==='Moto'){g='🏍';label='START';}else if(e.Type==='TriggerWin'){g='🏁';label='WIN';}
+  else if(e.Type==='EditorCamera'){g='🎥';}else if(e.Type==='ExplosiveBarrel'){g='💥';}else if(e.Type==='EditorPhysicsEntity'){g='▣';}
+  ctx.font='15px '+css('--font-ui');ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(g,sx,sy);
+  ctx.textAlign='left';ctx.textBaseline='alphabetic';
+  if(label){ctx.fillStyle=css('--marker');ctx.font='bold 10px '+css('--font-ui');ctx.fillText(label,sx+9,sy-6);}}
+function drawGizmo(e){const pt=posOf(e);if(!pt)return;const sx=wx(pt.x),sy=wy(pt.y);const acc=css('--accent');
   const poly=outline(e);
-  if(poly&&layerOf(e.Type)==='terrain'){
-    ctx.beginPath();poly.forEach((p,i)=>i?ctx.lineTo(wx(p.x),wy(p.y)):ctx.moveTo(wx(p.x),wy(p.y)));ctx.closePath();ctx.stroke();
-    (e.Vertexes||[]).forEach((v,i)=>{ctx.fillStyle=(i===hoverVtx)?'#f9e2af':'#f5c2e7';ctx.beginPath();ctx.arc(wx(v.x),wy(v.y),4,0,7);ctx.fill();});
-  } else { ctx.beginPath(); ctx.arc(sx,sy,11,0,7); ctx.stroke(); }
-}
+  if(poly&&metaFor(e.Type).group==='Terrain'){ctx.strokeStyle=acc;ctx.lineWidth=2;ctx.beginPath();poly.forEach((p,i)=>i?ctx.lineTo(wx(p.x),wy(p.y)):ctx.moveTo(wx(p.x),wy(p.y)));ctx.closePath();ctx.stroke();
+    (e.Vertexes||[]).forEach((v,i)=>{ctx.fillStyle=(i===hoverVtx)?css('--trigger'):acc;ctx.beginPath();ctx.arc(wx(v.x),wy(v.y),4,0,7);ctx.fill();});}
+  else{const b=entBounds(e);ctx.strokeStyle=acc;ctx.lineWidth=1.5;ctx.strokeRect(wx(b.mnx)-3,wy(b.mxy)-3,(b.mxx-b.mnx)*view.scale+6,(b.mxy-b.mny)*view.scale+6);}
+  // move gizmo (red X / green Y axes) + center
+  if(tool==='move'||tool==='select'){const L=46;
+    ctx.lineWidth=2;ctx.strokeStyle=css('--axis-x');ctx.beginPath();ctx.moveTo(sx,sy);ctx.lineTo(sx+L,sy);ctx.stroke();
+    ctx.fillStyle=css('--axis-x');ctx.beginPath();ctx.moveTo(sx+L,sy-4);ctx.lineTo(sx+L+7,sy);ctx.lineTo(sx+L,sy+4);ctx.fill();
+    ctx.strokeStyle=css('--axis-y');ctx.beginPath();ctx.moveTo(sx,sy);ctx.lineTo(sx,sy-L);ctx.stroke();
+    ctx.fillStyle=css('--axis-y');ctx.beginPath();ctx.moveTo(sx-4,sy-L);ctx.lineTo(sx,sy-L-7);ctx.lineTo(sx+4,sy-L);ctx.fill();
+    ctx.fillStyle=acc;ctx.fillRect(sx-3,sy-3,6,6);}
+  if(tool==='rotate'){ctx.strokeStyle=acc;ctx.lineWidth=1.5;ctx.beginPath();ctx.arc(sx,sy,42,0,7);ctx.stroke();}}
 
-// ── interaction: select / drag-vertex / move / pan ──────────────────────────
-let down=false, last=null, moved=0, mode=null, dragVtx=-1, hoverVtx=-1;
-function vertexAt(e,m){ // index of selected terrain vertex under cursor (screen), or -1
-  if(!e||!e.Vertexes) return -1;
-  for(let i=0;i<e.Vertexes.length;i++){const v=e.Vertexes[i];const dx=wx(v.x)-m.x,dy=wy(v.y)-m.y;if(dx*dx+dy*dy<=36)return i;}
-  return -1;
-}
+// ── interaction ────────────────────────────────────────────────────────────────
+let down=false,last=null,moved=0,mode=null,dragVtx=-1,hoverVtx=-1,axis=null,rotStart=0;
 function localM(ev){const r=cv.getBoundingClientRect();return{x:ev.clientX-r.left,y:ev.clientY-r.top};}
-cv.addEventListener('mousedown',ev=>{
-  down=true;moved=0;last={x:ev.clientX,y:ev.clientY};cv.classList.add('drag');
-  const m=localM(ev);
-  dragVtx=vertexAt(selected,m);
-  if(dragVtx>=0){mode='vertex';return;}
-  const hit=pick(m);
-  if(hit){ if(hit!==selected){selected=hit;renderInspector();} mode='move'; }
-  else { mode='pan'; }
-});
-window.addEventListener('mouseup',()=>{
-  if(down&&mode==='pan'&&moved<4){selected=null;renderInspector();draw();}
-  if((mode==='vertex'||mode==='move')&&moved>3) markDirty();
-  down=false;mode=null;dragVtx=-1;cv.classList.remove('drag');
-});
-window.addEventListener('mousemove',ev=>{
-  const m=localM(ev),w=s2w(m.x,m.y);
-  $('#hud').textContent=`world (${w.x.toFixed(0)}, ${w.y.toFixed(0)})  ·  ${view.scale.toFixed(2)} px/u  ·  ${ENTS.length} ents${dirty?'  ·  ● unsaved':''}`;
-  if(!down){ const hv=vertexAt(selected,m); if(hv!==hoverVtx){hoverVtx=hv;draw();} return; }
-  const dx=ev.clientX-last.x, dy=ev.clientY-last.y; moved+=Math.abs(dx)+Math.abs(dy);
-  const dwx=dx/view.scale, dwy=-dy/view.scale;
-  if(mode==='pan'){ view.x-=dwx; view.y-=dwy; }
-  else if(mode==='vertex'&&selected){ const v=selected.Vertexes[dragVtx]; v.x+=dwx; v.y+=dwy; }
-  else if(mode==='move'&&selected){ translate(selected,dwx,dwy); }
-  last={x:ev.clientX,y:ev.clientY}; draw();
-});
-cv.addEventListener('wheel',ev=>{
-  ev.preventDefault(); const m=localM(ev); const before=s2w(m.x,m.y);
-  view.scale*= ev.deltaY<0?1.1:1/1.1; const after=s2w(m.x,m.y);
-  view.x+=before.x-after.x; view.y+=before.y-after.y; draw();
-},{passive:false});
-
-function pick(m){
-  let best=null,bd=14*14;
-  ENTS.forEach(ent=>{if(!LAYERS[layerOf(ent.Type)].on)return;const pt=posOf(ent);if(!pt)return;
-    const dx=wx(pt.x)-m.x,dy=wy(pt.y)-m.y,d=dx*dx+dy*dy;if(d<bd){bd=d;best=ent;}});
-  if(!best){for(const ent of ENTS){if(layerOf(ent.Type)!=='terrain'||!LAYERS.terrain.on)continue;const poly=outline(ent);if(poly&&pointIn(poly,m)){best=ent;break;}}}
-  return best;
-}
+function vertexAt(e,m){if(!e||!e.Vertexes)return -1;for(let i=0;i<e.Vertexes.length;i++){const v=e.Vertexes[i];const dx=wx(v.x)-m.x,dy=wy(v.y)-m.y;if(dx*dx+dy*dy<=36)return i;}return -1;}
+function axisAt(e,m){if(!e)return null;const pt=posOf(e);if(!pt)return null;const sx=wx(pt.x),sy=wy(pt.y),L=46;
+  if(m.x>=sx+4&&m.x<=sx+L+8&&Math.abs(m.y-sy)<=5)return 'x';
+  if(m.y<=sy-4&&m.y>=sy-L-8&&Math.abs(m.x-sx)<=5)return 'y';
+  if(Math.abs(m.x-sx)<=5&&Math.abs(m.y-sy)<=5)return 'free'; return null;}
+function pick(m){let best=null,bd=14*14;ENTS.forEach(ent=>{if(hidden.has(ent._id))return;const pt=posOf(ent);if(!pt)return;const dx=wx(pt.x)-m.x,dy=wy(pt.y)-m.y,d=dx*dx+dy*dy;if(d<bd){bd=d;best=ent;}});
+  if(!best){for(const ent of ENTS){if(hidden.has(ent._id)||metaFor(ent.Type).group!=='Terrain')continue;const poly=outline(ent);if(poly&&pointIn(poly,m)){best=ent;break;}}}return best;}
 function pointIn(poly,m){let inside=false;for(let i=0,j=poly.length-1;i<poly.length;j=i++){const xi=wx(poly[i].x),yi=wy(poly[i].y),xj=wx(poly[j].x),yj=wy(poly[j].y);if(((yi>m.y)!==(yj>m.y))&&(m.x<(xj-xi)*(m.y-yi)/(yj-yi)+xi))inside=!inside;}return inside;}
+let spaceDown=false;
+window.addEventListener('keydown',e=>{if(e.target.tagName==='INPUT'||e.target.tagName==='SELECT')return;
+  if(e.code==='Space'){spaceDown=true;e.preventDefault();}
+  else if(e.key==='q')setTool('select');else if(e.key==='w')setTool('move');else if(e.key==='e')setTool('rotate');
+  else if(e.key==='f')frameSel();else if(e.key==='a')frameAll();
+  else if((e.key==='Delete'||e.key==='Backspace')&&selected)delEntity();});
+window.addEventListener('keyup',e=>{if(e.code==='Space')spaceDown=false;});
+cv.addEventListener('mousedown',ev=>{down=true;moved=0;last={x:ev.clientX,y:ev.clientY};const m=localM(ev);
+  if(spaceDown||tool==='pan'){mode='pan';return;}
+  dragVtx=vertexAt(selected,m); if(dragVtx>=0){mode='vertex';return;}
+  if(selected&&(tool==='move'||tool==='select')){const a=axisAt(selected,m);if(a){mode='move';axis=a;return;}}
+  if(selected&&tool==='rotate'){const pt=posOf(selected);rotStart=Math.atan2(m.y-wy(pt.y),m.x-wx(pt.x));mode='rotate';return;}
+  const hit=pick(m);
+  if(hit){selectEnt(hit,false);mode=(tool==='move'||tool==='rotate')?tool:'select';axis='free';
+    if(tool==='rotate'){const pt=posOf(hit);rotStart=Math.atan2(m.y-wy(pt.y),m.x-wx(pt.x));}}
+  else{mode='pan';}});
+window.addEventListener('mouseup',()=>{if(down&&mode==='pan'&&moved<4&&tool!=='pan'&&!spaceDown){selectEnt(null);}if((mode==='vertex'||mode==='move'||mode==='rotate')&&moved>3)markDirty();down=false;mode=null;dragVtx=-1;axis=null;});
+window.addEventListener('mousemove',ev=>{const m=localM(ev),w=s2w(m.x,m.y);
+  $('#sCur').textContent=`${w.x.toFixed(0)}, ${w.y.toFixed(0)}`;$('#hud').textContent=`${w.x.toFixed(0)}, ${w.y.toFixed(0)}`;
+  if(!down){const hv=vertexAt(selected,m);if(hv!==hoverVtx){hoverVtx=hv;draw();}return;}
+  const dx=ev.clientX-last.x,dy=ev.clientY-last.y;moved+=Math.abs(dx)+Math.abs(dy);let dwx=dx/view.scale,dwy=-dy/view.scale;
+  if(mode==='pan'){view.x-=dwx;view.y-=dwy;}
+  else if(mode==='vertex'&&selected){const v=selected.Vertexes[dragVtx];v.x+=dwx;v.y+=dwy;if(snap){v.x=Math.round(v.x/snapStep)*snapStep;v.y=Math.round(v.y/snapStep)*snapStep;}}
+  else if(mode==='move'&&selected){if(axis==='x')dwy=0;if(axis==='y')dwx=0;translate(selected,dwx,dwy);if(selected.Properties&&Array.isArray(selected.Properties.position))refreshInspectorVals();}
+  else if(mode==='rotate'&&selected){const pt=posOf(selected);const ang=Math.atan2(m.y-wy(pt.y),m.x-wx(pt.x));let dd=(ang-rotStart)*180/Math.PI;rotStart=ang;const P=selected.Properties||{};P.rotation=((P.rotation||0)+dd);refreshInspectorVals();}
+  last={x:ev.clientX,y:ev.clientY};draw();});
+cv.addEventListener('wheel',ev=>{ev.preventDefault();const m=localM(ev),before=s2w(m.x,m.y);view.scale*=ev.deltaY<0?1.1:1/1.1;const after=s2w(m.x,m.y);view.x+=before.x-after.x;view.y+=before.y-after.y;updZoom();draw();},{passive:false});
 
-// ── editable inspector ──────────────────────────────────────────────────────
-function renderInspector(){
-  const b=$('#inspBody');
-  if(!selected){b.innerHTML='<p class="empty">Click an entity to select. Drag its handles to reshape, drag its body to move.</p>';return;}
-  const e=selected,P=e.Properties||{};
-  let h=`<div class="ty">${e.Type}</div>`;
-  if(e.Vertexes) h+=`<div class="meta">${e.Vertexes.length} vertexes${P.spline?' · spline (drag yellow handles)':''}</div>`;
-  Object.keys(P).sort().forEach(k=>{ h+=field(k,P[k]); });
-  h+=`<div class="delbar"><button onclick="delEntity()">🗑 Delete entity</button></div>`;
-  b.innerHTML=h;
+// ── hierarchy ──────────────────────────────────────────────────────────────────
+function renderTree(){
+  const q=$('#filter').value.trim().toLowerCase();let typeFilter=null;let qq=q;
+  const tm=q.match(/^t:(\S+)/);if(tm){typeFilter=tm[1];qq=q.replace(/^t:\S+\s*/,'');}
+  const groups={};GROUP_ORDER.forEach(g=>groups[g]=[]);
+  ENTS.forEach(e=>{const g=groupOf(e);(groups[g]||(groups[g]=[])).push(e);});
+  const tree=$('#tree');tree.innerHTML='';const filtering=!!(qq||typeFilter);
+  GROUP_ORDER.forEach(g=>{let items=groups[g]||[];if(!items.length)return;
+    let shown=items;if(filtering)shown=items.filter(e=>(!typeFilter||(g.toLowerCase().includes(typeFilter)||e.Type.toLowerCase().includes(typeFilter)))&&(!qq||nameOf(e).toLowerCase().includes(qq)));
+    if(filtering&&!shown.length)return;
+    const gd=document.createElement('div');gd.className='grp';
+    const isOpen=filtering||!collapsed.has(g);
+    const gh=document.createElement('div');gh.className='ghead';gh.innerHTML=`<span class="tri">${isOpen?'▼':'▶'}</span><span class="gname">${g}</span><span class="gcount">${shown.length}</span>`;
+    gh.onclick=()=>{if(collapsed.has(g))collapsed.delete(g);else collapsed.add(g);renderTree();};
+    gd.appendChild(gh);
+    if(isOpen)shown.forEach(e=>{const r=document.createElement('div');r.className='row'+(e===selected?' sel':'')+(hidden.has(e._id)?' hidden':'');r.dataset.id=e._id;
+      r.innerHTML=`<span class="ico">${metaFor(e.Type).icon}</span><span class="nm">${escapeHtml(nameOf(e))}</span><span class="eye">${hidden.has(e._id)?'🚫':'👁'}</span>`;
+      r.onclick=ev=>{if(ev.target.classList.contains('eye')){toggleHide(e);return;}selectEnt(e,true);};
+      r.ondblclick=()=>{selectEnt(e,false);frameSel();};
+      gd.appendChild(r);});
+    tree.appendChild(gd);});
 }
-function field(k,v){
-  const id='f_'+k.replace(/[^A-Za-z0-9]/g,'_');
-  if(typeof v==='boolean') return `<div class="row"><span class="k">${k}</span><input type="checkbox" ${v?'checked':''} onchange="setProp('${k}',this.checked)"></div>`;
-  if(typeof v==='number') return `<div class="row"><span class="k">${k}</span><input type="number" step="any" value="${v}" onchange="setProp('${k}',parseFloat(this.value))"></div>`;
-  if(typeof v==='string') return `<div class="row"><span class="k">${k}</span><input type="text" value="${esc(v)}" onchange="setProp('${k}',this.value)"></div>`;
-  if(Array.isArray(v)&&v.every(x=>typeof x==='number')) return `<div class="row"><span class="k">${k}</span><input type="text" value="${v.join(', ')}" onchange="setArr('${k}',this.value)"></div>`;
-  return `<div class="row"><span class="k">${k}</span><span class="ro">${esc(JSON.stringify(v))}</span></div>`;
+function escapeHtml(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+function toggleHide(e){if(hidden.has(e._id))hidden.delete(e._id);else hidden.add(e._id);renderTree();draw();}
+function selectEnt(e,fromTree){selected=e;renderInspector();updSel();
+  if(!fromTree)syncTreeSelection(); else renderTree(); draw();}
+function syncTreeSelection(){document.querySelectorAll('.row.sel').forEach(r=>r.classList.remove('sel'));
+  if(selected){const r=document.querySelector(`.row[data-id="${selected._id}"]`);if(r){r.classList.add('sel');r.scrollIntoView({block:'nearest'});}else{ // group collapsed → open it
+    collapsed.delete(groupOf(selected));renderTree();const r2=document.querySelector(`.row[data-id="${selected._id}"]`);if(r2)r2.scrollIntoView({block:'nearest'});}}}
+
+// ── inspector ──────────────────────────────────────────────────────────────────
+function renderInspector(){const ins=$('#insp');if(!selected){ins.innerHTML='<div class="insp-empty">No selection</div>';return;}
+  const e=selected,P=e.Properties||{};let h='';
+  // Transform
+  const tf=[];
+  if(Array.isArray(P.position))tf.push(vecField('position','Position',P.position));
+  if('rotation'in P)tf.push(numField('rotation','Rotation','°'));
+  if('scale'in P)tf.push(numField('scale','Scale'));
+  h+=fold('Transform',tf.join('')||'<div class="f"><label>—</label><span class="ro">no transform</span></div>');
+  // Identity
+  h+=fold('Identity',`<div class="f"><label>type</label><span class="ctl"><span class="typechip">${e.Type}</span></span></div>`+
+    ('name'in P?txtField('name','name'):'')+`<div class="f"><label>id</label><span class="ro">${e._id}${e.Vertexes?' · '+e.Vertexes.length+' pts'+(P.spline?' (spline)':''):''}</span></div>`);
+  // Appearance (sprites)
+  if('frame'in P){let th='';const fm=FRAMES[P.frame];if(fm)th=`<div class="thumb" style="background-image:url('/api/atlas/${fm.atlas}')" title="${P.frame}"></div>`;
+    h+=fold('Appearance',th+selField('frame','frame',Object.keys(FRAMES))+('opacity'in P?rangeField('opacity','opacity',0,1):''));}
+  // Physics
+  const phys=['density','friction','restitution'].filter(k=>k in P);
+  if(phys.length)h+=fold('Physics',phys.map(k=>(k==='density'||k==='friction'||k==='restitution')?rangeField(k,k,0,(k==='density'?5:1)):numField(k,k)).join(''));
+  // everything else
+  const shown=new Set(['position','rotation','scale','name','frame','opacity','density','friction','restitution']);
+  const rest=Object.keys(P).filter(k=>!shown.has(k)).sort();
+  if(rest.length)h+=fold('Type-specific',rest.map(k=>autoField(k,P[k])).join(''));
+  h+=`<div class="delrow"><button onclick="delEntity()">Delete entity</button></div>`;
+  ins.innerHTML=h;
+  ins.querySelectorAll('.fold>.fhead').forEach(fh=>fh.onclick=()=>{const n=fh.dataset.fold;foldOpen[n]=!foldOpen[n];renderInspector();});
+  bindScrub();
 }
-function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');}
-function setProp(k,v){selected.Properties[k]=v;markDirty();}
+function fold(name,inner){const open=foldOpen[name]!==false;return `<div class="fold"><div class="fhead" data-fold="${name}"><span class="tri">${open?'▼':'▶'}</span>${name}</div>${open?`<div class="fbody">${inner}</div>`:''}</div>`;}
+function autoField(k,v){if(typeof v==='boolean')return boolField(k,k);if(typeof v==='number')return numField(k,k);if(typeof v==='string')return txtField(k,k);
+  if(Array.isArray(v)&&v.every(x=>typeof x==='number'))return arrField(k,k,v);return `<div class="f"><label title="${k}">${k}</label><span class="ro">${escapeHtml(JSON.stringify(v))}</span></div>`;}
+function numField(k,lbl,suf){const v=selected.Properties[k];return `<div class="f"><label class="scrub" data-k="${k}">${lbl}</label><span class="ctl"><input type="number" step="any" value="${fmtNum(v)}" oninput="setNum('${k}',this.value)">${suf?`<span class="axis">${suf}</span>`:''}</span></div>`;}
+function txtField(k,lbl){return `<div class="f"><label>${lbl}</label><span class="ctl"><input type="text" value="${escapeHtml(selected.Properties[k])}" oninput="setVal('${k}',this.value)"></span></div>`;}
+function boolField(k,lbl){return `<div class="f"><label>${lbl}</label><span class="ctl"><input type="checkbox" ${selected.Properties[k]?'checked':''} onchange="setVal('${k}',this.checked)"></span></div>`;}
+function rangeField(k,lbl,mn,mx){const v=selected.Properties[k];return `<div class="f"><label class="scrub" data-k="${k}">${lbl}</label><span class="ctl"><input type="range" min="${mn}" max="${mx}" step="${(mx-mn)/200}" value="${v}" oninput="setNum('${k}',this.value);this.nextElementSibling.textContent=(+this.value).toFixed(2)"><span class="rv">${(+v).toFixed(2)}</span></span></div>`;}
+function vecField(k,lbl,arr){return `<div class="f"><label>${lbl}</label><span class="ctl"><span class="axis x">X</span><input type="number" step="any" value="${fmtNum(arr[0])}" oninput="setVec('${k}',0,this.value)"><span class="axis y">Y</span><input type="number" step="any" value="${fmtNum(arr[1])}" oninput="setVec('${k}',1,this.value)"></span></div>`;}
+function arrField(k,lbl,arr){return `<div class="f"><label title="${k}">${lbl}</label><span class="ctl"><input type="text" value="${arr.map(fmtNum).join(', ')}" oninput="setArr('${k}',this.value)"></span></div>`;}
+function selField(k,lbl,opts){const cur=selected.Properties[k];const o=opts.slice(0,400).map(f=>`<option ${f===cur?'selected':''}>${escapeHtml(f)}</option>`).join('');return `<div class="f"><label>${lbl}</label><span class="ctl"><select onchange="setVal('${k}',this.value);renderInspector()">${o}</select></span></div>`;}
+function fmtNum(v){return (Math.round((+v)*1000)/1000);}
+function setVal(k,v){selected.Properties[k]=v;markDirty();draw();}
+function setNum(k,v){const n=parseFloat(v);if(!isNaN(n)){selected.Properties[k]=n;markDirty();draw();}}
+function setVec(k,i,v){const n=parseFloat(v);if(!isNaN(n)){selected.Properties[k][i]=n;markDirty();draw();}}
 function setArr(k,s){const a=s.split(',').map(x=>parseFloat(x.trim())).filter(x=>!isNaN(x));if(a.length){selected.Properties[k]=a;markDirty();draw();}}
-function delEntity(){const i=ENTS.indexOf(selected);if(i>=0){ENTS.splice(i,1);selected=null;renderInspector();buildLayers();markDirty();draw();}}
+function refreshInspectorVals(){ // light refresh of position/rotation fields during drag
+  const ins=$('#insp');const P=selected.Properties||{};
+  ins.querySelectorAll('.f').forEach(()=>{});renderInspector();}
+let scrubbing=null;
+function bindScrub(){document.querySelectorAll('.f label.scrub').forEach(l=>{l.onmousedown=ev=>{ev.preventDefault();const k=l.dataset.k;const start=+selected.Properties[k]||0;const mag=Math.max(Math.abs(start),1);const step=mag>100?1:mag>10?0.1:0.01;scrubbing={k,start,sx:ev.clientX,step};};});}
+window.addEventListener('mousemove',ev=>{if(!scrubbing)return;const dx=ev.clientX-scrubbing.sx;const mult=ev.shiftKey?10:1;selected.Properties[scrubbing.k]=+(scrubbing.start+dx*scrubbing.step*mult).toFixed(4);markDirty();renderInspector();draw();});
+window.addEventListener('mouseup',()=>{scrubbing=null;});
+function delEntity(){const i=ENTS.indexOf(selected);if(i<0)return;hidden.delete(selected._id);ENTS.splice(i,1);selected=null;renderInspector();renderTree();updSel();updCount();markDirty();draw();}
 
-// ── chrome ───────────────────────────────────────────────────────────────────
-function buildLayers(){
-  const counts={}; ENTS.forEach(e=>{const L=layerOf(e.Type);counts[L]=(counts[L]||0)+1;});
-  const box=$('#layers'); box.innerHTML='';
-  Object.entries(LAYERS).forEach(([k,L])=>{
-    const row=document.createElement('label'); row.className='layer';
-    row.innerHTML=`<input type="checkbox" ${L.on?'checked':''}><span class="sw" style="background:${L.color}"></span>${L.label}<span class="ct">${counts[k]||0}</span>`;
-    row.querySelector('input').onchange=ev=>{L.on=ev.target.checked;draw();};
-    box.appendChild(row);
-  });
-  $('#legend').innerHTML='🏍 start · 🏁 win · 🎥 cam · 💥 barrel<br>drag yellow dots to reshape terrain<br>edit fields in the inspector →';
-}
-function toggleLabels(){showLabels=!showLabels;draw();}
-function markDirty(){dirty=true;$('#saveBtn').disabled=false;setStatus('● unsaved','dirty');}
-function setStatus(t,cls){const s=$('#status');s.textContent=t;s.className=cls||'';}
+// ── status / chrome ──────────────────────────────────────────────────────────
+function updZoom(){$('#sZoom').textContent=Math.round(view.scale*100)+'%';}
+function updCount(){$('#sCount').textContent=ENTS.length+' entities';}
+function updSel(){$('#sSel').textContent=selected?`▸ ${nameOf(selected)} (${selected.Type})`:'—';}
+function setStat(t,c){const s=$('#stat');s.textContent=t;s.className='seg'+(c?' '+c:'');}
+function markDirty(){dirty=true;$('#saveBtn').disabled=false;setStat('● unsaved','dirty');}
+function setTool(t){tool=t;['select','move','rotate','pan'].forEach(x=>$('#t'+x[0].toUpperCase()+x.slice(1)).classList.toggle('on',x===t));draw();}
+function toggleGrid(){showGrid=!showGrid;$('#bGrid').classList.toggle('on',showGrid);draw();}
+function toggleSnap(){snap=!snap;$('#bSnap').classList.toggle('on',snap);}
+function toggleArt(){showArt=!showArt;$('#bArt').classList.toggle('on',showArt);draw();}
+function toggleTheme(){const t=document.documentElement.dataset.theme==='unity-dark'?'pro-light':'unity-dark';document.documentElement.dataset.theme=t;localStorage.setItem(LS('theme'),t);draw();}
 
-function readTimes(){return [0,1,2].map(i=>{const v=parseFloat($('#t'+i).value);return isNaN(v)?(LEVEL.times[i]||0):v;});}
-['t0','t1','t2'].forEach(id=>$('#'+id).addEventListener('change',()=>{LEVEL.times=readTimes();markDirty();}));
+// medal times live in a small Transform-like editor? keep in toolbar via prompt — simpler: status seg
+// (times are edited via the Level fold below)
 
-async function save(){
-  LEVEL.times=readTimes(); LEVEL.Entities=ENTS;
-  setStatus('saving…','busy');
+// ── atlas loading ──────────────────────────────────────────────────────────────
+async function loadAtlas(lid){FRAMES={};ATLAS={};const r=await fetch('/api/atlasmeta/'+encodeURIComponent(lid));const d=await r.json();FRAMES=d.frames||{};
+  (d.atlases||[]).forEach(name=>{const img=new Image();img.onload=()=>draw();img.src='/api/atlas/'+name;ATLAS[name]=img;});}
+
+// ── load / save / export ────────────────────────────────────────────────────────
+async function loadLevel(lid){LID=lid;const r=await fetch('/api/level/'+encodeURIComponent(lid));LEVEL=await r.json();
+  ENTS=LEVEL.Entities||[];ENTS.forEach((e,i)=>e._id=i);selected=null;dirty=false;hidden=new Set();hoverVtx=-1;
+  collapsed=new Set(BIG_GROUPS);$('#saveBtn').disabled=true;
+  $('#key').placeholder=KEYS[lid]?'key on file ✓':'level key (hex)';
+  await loadAtlas(lid);
+  renderInspector();renderTree();resize();frameAll();updZoom();updCount();updSel();
+  setStat(KEYS[lid]?'ready · key on file':'ready');}
+async function save(){LEVEL.Entities=ENTS.map(({_id,...e})=>e);setStat('saving…','busy');
   const r=await fetch('/api/level/'+encodeURIComponent(LID),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(LEVEL)});
-  const d=await r.json();
-  if(d.ok){dirty=false;$('#saveBtn').disabled=true;setStatus('✓ saved ('+d.entities+' ents)','ok');}
-  else setStatus('✗ '+d.error,'err');
-  return d.ok;
-}
-async function exportDat(){
-  if(dirty){ if(!await save()) return; }
-  const key=$('#key').value.trim();
-  if(!key && !KEYS[LID]){ setStatus('✗ enter the per-level key','err'); $('#key').focus(); return; }
-  setStatus('encrypting… (~1 min, runs cipher oracle)','busy'); $('#exportBtn').disabled=true;
-  try{
-    const r=await fetch('/api/export/'+encodeURIComponent(LID),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key,remember:true})});
-    const d=await r.json();
-    if(d.ok){setStatus('✓ wrote '+d.path+' ('+d.bytes+' B)','ok');KEYS[LID]=true;}
-    else setStatus('✗ '+d.error,'err');
-  }catch(e){setStatus('✗ '+e,'err');}
-  $('#exportBtn').disabled=false;
-}
+  const d=await r.json();ENTS.forEach((e,i)=>e._id=i);
+  if(d.ok){dirty=false;$('#saveBtn').disabled=true;setStat('✓ saved ('+d.entities+')','ok');}else setStat('✗ '+d.error,'err');return d.ok;}
+async function exportDat(){if(dirty){if(!await save())return;}const key=$('#key').value.trim();
+  if(!key&&!KEYS[LID]){setStat('✗ enter the level key','err');$('#key').focus();return;}
+  setStat('encrypting… (~1 min)','busy');$('#exportBtn').disabled=true;
+  try{const r=await fetch('/api/export/'+encodeURIComponent(LID),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key,remember:true})});
+    const d=await r.json();if(d.ok){setStat('✓ wrote '+d.path.split('/').pop()+' ('+d.bytes+' B)','ok');KEYS[LID]=true;}else setStat('✗ '+d.error,'err');}
+  catch(e){setStat('✗ '+e,'err');}$('#exportBtn').disabled=false;}
 
-async function loadLevel(lid){
-  LID=lid; const r=await fetch('/api/level/'+encodeURIComponent(lid)); LEVEL=await r.json();
-  ENTS=LEVEL.Entities||[]; selected=null; dirty=false; hoverVtx=-1; renderInspector();
-  const t=LEVEL.times||[0,0,0]; $('#t0').value=t[0]; $('#t1').value=t[1]; $('#t2').value=t[2];
-  $('#saveBtn').disabled=true;
-  $('#key').placeholder = KEYS[lid] ? 'key on file ✓' : 'per-level key (hex)';
-  setStatus(KEYS[lid]?'ready (key on file)':'ready');
-  buildLayers(); resize(); fitToView(); draw();
-}
-async function init(){
-  const kr=await fetch('/api/keys'); KEYS=(await kr.json()).have||{};
-  const r=await fetch('/api/levels'); const d=await r.json();
-  const sel=$('#lvlSel'); sel.innerHTML='';
-  (d.levels||[]).forEach(l=>{const o=document.createElement('option');o.value=o.textContent=l;sel.appendChild(o);});
-  sel.onchange=()=>{ if(dirty&&!confirm('Discard unsaved changes?')){sel.value=LID;return;} loadLevel(sel.value); };
-  if(d.levels&&d.levels.length) loadLevel(d.levels[0]);
-  else $('#inspBody').innerHTML='<p class="empty">No cached levels. Import one (see README).</p>';
-}
-function resize(){const r=cv.parentElement.getBoundingClientRect();cv.width=r.width;cv.height=r.height;}
+// ── splitters ────────────────────────────────────────────────────────────────
+function initSplitter(el,varName,fromLeft){let on=false;el.addEventListener('mousedown',e=>{on=true;e.preventDefault();});
+  window.addEventListener('mousemove',e=>{if(!on)return;let w=fromLeft?e.clientX:window.innerWidth-e.clientX;w=Math.max(180,Math.min(560,w));document.documentElement.style.setProperty(varName,w+'px');localStorage.setItem(LS(varName),w);resize();draw();});
+  window.addEventListener('mouseup',()=>{on=false;});
+  el.addEventListener('dblclick',()=>{document.documentElement.style.setProperty(varName,'0px');resize();draw();});}
+
+function resize(){const v=document.querySelector('.viewport').getBoundingClientRect();cv.width=Math.max(10,v.width);cv.height=Math.max(10,v.height);}
 window.addEventListener('resize',()=>{resize();draw();});
 window.addEventListener('beforeunload',e=>{if(dirty){e.preventDefault();e.returnValue='';}});
+
+async function init(){
+  const th=localStorage.getItem(LS('theme'));if(th)document.documentElement.dataset.theme=th;
+  ['--left-w','--right-w'].forEach(v=>{const s=localStorage.getItem(LS(v));if(s)document.documentElement.style.setProperty(v,s+'px');});
+  setTool('select');$('#bGrid').classList.add('on');$('#bArt').classList.add('on');
+  initSplitter($('#lsplit'),'--left-w',true);initSplitter($('#rsplit'),'--right-w',false);
+  KEYS=((await (await fetch('/api/keys')).json()).have)||{};
+  const d=await (await fetch('/api/levels')).json();const sel=$('#lvlSel');sel.innerHTML='';
+  (d.levels||[]).forEach(l=>{const o=document.createElement('option');o.value=o.textContent=l;sel.appendChild(o);});
+  sel.onchange=()=>{if(dirty&&!confirm('Discard unsaved changes?')){sel.value=LID;return;}loadLevel(sel.value);};
+  if(d.levels&&d.levels.length)loadLevel(d.levels[0]);else{$('#tree').innerHTML='<div class="insp-empty">No cached levels.</div>';}
+}
 init();
 </script>
 </body>

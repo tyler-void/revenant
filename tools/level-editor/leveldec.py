@@ -21,13 +21,71 @@ Sprites / Moto / triggers position themselves via Properties.position = [x, y].
 ⚠️  Decrypted level data is circumvention material — it stays LOCAL (see
 docs/PRESERVATION-PLAYBOOK.md / LEGAL.md). The levels/ cache is gitignored.
 """
-import os, sys, gzip, json, plistlib, base64, subprocess, struct
+import os, sys, gzip, json, plistlib, base64, subprocess, struct, glob, re
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
 UNIDBG = os.path.join(ROOT, "tools", "unidbg")
 CACHE = os.path.join(HERE, "levels")           # gitignored local cache
+UNPACK = os.environ.get("BR_UNPACK", os.path.join(ROOT, "build", "work", "assets", "unpack"))
 GZIP_MAGIC = b"\x1f\x8b\x08"
+
+
+# ── texture atlases (cocos2d format-3 sprite sheets) ─────────────────────────
+# The game's sprites reference a `frame` name (e.g. "metal5.png") packed into a
+# .plist+texture atlas. We parse the atlas plists so the editor can draw the
+# real art. Textures are WebP-in-.png (browsers decode WebP fine). Atlas art is
+# © game data — served only locally, never committed.
+_ATLAS_IDX = None
+
+def _nums(s):
+    return [float(x) for x in re.findall(r"-?\d+\.?\d*", s or "")]
+
+def atlas_index():
+    """frameName -> (textureFileName, frame-record). Cached."""
+    global _ATLAS_IDX
+    if _ATLAS_IDX is not None:
+        return _ATLAS_IDX
+    idx = {}
+    for p in glob.glob(os.path.join(UNPACK, "*.plist")):
+        try:
+            d = plistlib.load(open(p, "rb"))
+        except Exception:
+            continue
+        fr = d.get("frames") if isinstance(d, dict) else None
+        if not isinstance(fr, dict):
+            continue
+        tex = os.path.basename(p)[:-6] + ".png"   # Foo.plist -> Foo.png
+        for name, rec in fr.items():
+            idx.setdefault(name, (tex, rec))
+    _ATLAS_IDX = idx
+    return idx
+
+def _frame_geom(rec):
+    """Normalise a cocos2d format-3 (or older) frame record → pixel geometry."""
+    tr = _nums(rec.get("textureRect") or rec.get("frame"))      # x, y, w, h
+    rot = bool(rec.get("textureRotated") or rec.get("rotated"))
+    off = _nums(rec.get("spriteOffset") or rec.get("offset") or "{0,0}")
+    src = _nums(rec.get("spriteSourceSize") or rec.get("sourceSize") or "")
+    return {"rect": tr[:4], "rotated": rot, "offset": off[:2], "source": src[:2]}
+
+def atlas_meta_for_level(level):
+    """Resolve every sprite `frame` in a level to its atlas + pixel geometry."""
+    idx = atlas_index()
+    frames, atlases = {}, set()
+    for e in level.get("Entities", []):
+        f = (e.get("Properties") or {}).get("frame")
+        if f and f in idx and f not in frames:
+            tex, rec = idx[f]
+            g = _frame_geom(rec); g["atlas"] = tex
+            frames[f] = g; atlases.add(tex)
+    return {"frames": frames, "atlases": sorted(atlases)}
+
+def atlas_texture_path(name):
+    """Safe-resolve an atlas texture name to a path under UNPACK (no traversal)."""
+    name = os.path.basename(name)
+    p = os.path.join(UNPACK, name)
+    return p if os.path.exists(p) else None
 
 # ── plist ↔ JSON (display) ──────────────────────────────────────────────────
 # JSON can't tell int 27 from real 27.0, and the game's plist parser cares. So

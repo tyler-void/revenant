@@ -56,6 +56,23 @@ class H(BaseHTTPRequestHandler):
         if self.path == "/api/keys":
             keys = ld.load_keys()
             return self._send(200, {"have": {l: (l in keys) for l in cached_lids()}})
+        if self.path.startswith("/api/atlasmeta/"):
+            lid = self.path[len("/api/atlasmeta/"):]
+            p = ld.cache_path(lid)
+            if not os.path.exists(p):
+                return self._send(404, {"error": "no cached level %r" % lid})
+            with open(p) as f:
+                level = json.load(f)
+            return self._send(200, ld.atlas_meta_for_level(level))
+        if self.path.startswith("/api/atlas/"):
+            name = self.path[len("/api/atlas/"):].split("?")[0]
+            tp = ld.atlas_texture_path(name)
+            if not tp:
+                return self._send(404, {"error": "no atlas %r" % name})
+            with open(tp, "rb") as f:
+                body = f.read()
+            # textures are WebP regardless of the .png name
+            return self._send(200, body, "image/webp")
         if self.path.startswith("/api/level/"):
             lid = self.path[len("/api/level/"):]
             p = ld.cache_path(lid)
