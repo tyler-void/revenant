@@ -34,6 +34,15 @@ FLAT_START = 320.0      # spawn flat zone
 FLAT_END = 300.0        # finish flat zone
 
 
+# Decoration frames, grouped by depth layer. Only freestanding scenery (no
+# structural wood/metal/bridge/finish pieces). Prefixes resolve against whatever
+# the template level actually contains, so a world-N template yields world-N art.
+DECOR_LAYERS = {
+    "bg":   ("Tree", "for"),       # foliage/trees — behind the terrain (z<0) or far fore
+    "surf": ("bor", "ter", "for"), # rocks + ground detail — sit on the surface (z>0)
+}
+
+
 # ── templates from a decoded level (valid game Properties; not committed) ────
 def load_templates(template_lid="1_1"):
     p = os.path.join(CACHE, "%s.level.json" % template_lid)
@@ -47,9 +56,48 @@ def load_templates(template_lid="1_1"):
     finish_children = [copy.deepcopy(E[i]) for i in refs if 0 <= i < len(E)]
     terrain = first("EditorPhysicsObject")
     tprops = {k: v for k, v in terrain["Properties"].items() if k != "position"}
+
+    # one decoration template per distinct frame, bucketed by layer (full
+    # Properties preserved → spriteSheet/anchors/color stay valid for the world)
+    decor = {"tree": [], "rock": [], "fore": []}
+    seen = set()
+    for e in E:
+        if e.get("Type") != "EditorSprite":
+            continue
+        f = e["Properties"].get("frame") or ""
+        if f in seen or not f:
+            continue
+        if f.startswith("Tree"):           bucket = "tree"
+        elif f.startswith("for"):          bucket = "fore"
+        elif f.startswith(("bor", "ter")): bucket = "rock"
+        else:                              continue
+        seen.add(f); decor[bucket].append(copy.deepcopy(e))
+
+    # an ExplosiveBarrel obstacle: the group + its child body/sprite, recentred to
+    # the origin so we can drop a copy anywhere on the track.
+    barrel = None
+    bg = first("ExplosiveBarrel")
+    if bg:
+        refs_b = bg["Properties"].get("refobjectList", [])
+        kids = [copy.deepcopy(E[i]) for i in refs_b if 0 <= i < len(E)]
+        cx = sum(k["Properties"]["position"][0] for k in kids if "position" in k["Properties"]) / max(1, len(kids))
+        cy = sum(k["Properties"]["position"][1] for k in kids if "position" in k["Properties"]) / max(1, len(kids))
+        for k in kids:
+            _translate_entity(k, -cx, -cy)        # recentre children to origin
+        barrel = {"group": copy.deepcopy(bg), "children": kids}
+
     return {"terrain_props": tprops, "moto": copy.deepcopy(first("Moto")),
             "camera": copy.deepcopy(first("EditorCamera")), "win": copy.deepcopy(win),
-            "finish_children": finish_children}
+            "finish_children": finish_children, "decor": decor, "barrel": barrel}
+
+
+def _translate_entity(ent, dx, dy):
+    """Shift an entity by (dx,dy): both its position and any world-coord Vertexes."""
+    p = ent.get("Properties", {})
+    if "position" in p:
+        p["position"] = [p["position"][0] + dx, p["position"][1] + dy]
+    for v in ent.get("Vertexes", []) or []:
+        v["x"] += dx; v["y"] += dy
 
 
 def _signed_area(vtx):
@@ -207,7 +255,108 @@ def _interp_first(segments):
     return segments[0][0]
 
 
-def generate(seed, length=2600, difficulty=0.6, template_lid="1_1", lid="5_1"):
+# ── scenery & obstacles ───────────────────────────────────────────────────────
+def _seg_surface(seg):
+    """y = f(x) along one ground segment (x is monotonic within a segment)."""
+    pts = [(p["x"], p["y"]) for p in seg]
+    def y_at(x):
+        if x <= pts[0][0]: return pts[0][1]
+        if x >= pts[-1][0]: return pts[-1][1]
+        for i in range(len(pts) - 1):
+            x0, y0 = pts[i]; x1, y1 = pts[i + 1]
+            if x0 <= x <= x1:
+                f = (x - x0) / (x1 - x0) if x1 > x0 else 0
+                return y0 + f * (y1 - y0)
+        return pts[-1][1]
+    return y_at, pts[0][0], pts[-1][0]
+
+
+def _place_decor(rng, tmpl, x, y, z=None, scale_mul=(0.7, 1.25), rot_jitter=0.0,
+                 name="Decor"):
+    """Clone a decoration template at (x,y) with jitter; returns the new entity."""
+    e = copy.deepcopy(tmpl); p = e["Properties"]
+    p["position"] = [float(x), float(y)]
+    p["scale"] = float(p.get("scale", 1.0) * rng.uniform(*scale_mul))
+    p["flipImageX"] = bool(rng.random() < 0.5)
+    if rot_jitter:
+        p["rotation"] = float(p.get("rotation", 0.0) + rng.uniform(-rot_jitter, rot_jitter))
+    if z is not None:
+        p["z"] = z
+    p["name"] = name
+    return e
+
+
+def decorate(rng, segments, ents, tpl, difficulty):
+    """Scatter depth-layered scenery so the track reads as hand-built, not bare."""
+    decor = tpl.get("decor") or {}
+    trees, rocks, fores = decor.get("tree", []), decor.get("rock", []), decor.get("fore", [])
+    n0 = len(ents)
+    for seg in segments:
+        y_at, x0, x1 = _seg_surface(seg)
+        if x1 - x0 < 80:
+            continue
+        # surface rocks / ground detail — sit ON the ground, in front of terrain
+        if rocks:
+            x = x0 + rng.uniform(40, 120)
+            while x < x1 - 40:
+                t = _place_decor(rng, rng.choice(rocks), x, y_at(x) + rng.uniform(2, 16),
+                                 z=rng.choice([3, 4, 5]), rot_jitter=6, name="GenRock")
+                ents.append(t)
+                x += rng.uniform(110, 230)
+        # background trees — behind the terrain, rooted near the surface
+        if trees:
+            x = x0 + rng.uniform(60, 200)
+            while x < x1 - 40:
+                t = _place_decor(rng, rng.choice(trees), x, y_at(x) + rng.uniform(35, 85),
+                                 z=rng.choice([-5, -6, -8]), scale_mul=(0.8, 1.4),
+                                 rot_jitter=5, name="GenTree")
+                ents.append(t)
+                x += rng.uniform(200, 380)
+    # foreground silhouettes — a few big dark bushes for parallax depth
+    if fores:
+        x0 = segments[0][0]["x"]; x1 = segments[-1][-1]["x"]
+        for _ in range(rng.randint(3, 6)):
+            x = rng.uniform(x0 + 300, x1 - 300)
+            seg = next((s for s in segments if s[0]["x"] <= x <= s[-1]["x"]), None)
+            yb = _seg_surface(seg)[0](x) if seg else 0
+            ents.append(_place_decor(rng, rng.choice(fores), x, yb - rng.uniform(0, 50),
+                                     z=13, scale_mul=(0.8, 1.2), name="GenFore"))
+    return len(ents) - n0
+
+
+def place_barrels(rng, segments, ents, tpl, difficulty):
+    """Drop ExplosiveBarrel obstacles on gentle ground; count scales with difficulty."""
+    barrel = tpl.get("barrel")
+    if not barrel:
+        return 0
+    count = int(round(difficulty * rng.uniform(2, 5)))
+    placed = 0
+    spots = []
+    for seg in segments:
+        y_at, x0, x1 = _seg_surface(seg)
+        if x1 - x0 < 200:
+            continue
+        x = x0 + 150
+        while x < x1 - 150:
+            if abs(y_at(x + 20) - y_at(x - 20)) < 22:   # near-flat → a fair barrel spot
+                spots.append((x, y_at(x)))
+            x += rng.uniform(120, 220)
+    rng.shuffle(spots)
+    for (bx, by) in spots[:count]:
+        kids = [copy.deepcopy(k) for k in barrel["children"]]
+        idxs = []
+        for k in kids:
+            _translate_entity(k, bx, by + 10)          # barrel sits on the surface
+            idxs.append(len(ents)); ents.append(k)
+        grp = copy.deepcopy(barrel["group"])
+        grp["Properties"]["refobjectList"] = idxs
+        grp["Properties"]["name"] = "GenBarrel%d" % placed
+        ents.append(grp); placed += 1
+    return placed
+
+
+def generate(seed, length=2600, difficulty=0.6, template_lid="1_1", lid="5_1",
+             decor=True, obstacles=True):
     rng = random.Random(seed)
     tpl = load_templates(template_lid)
     segments = build_segments(rng, length, difficulty)
@@ -230,6 +379,11 @@ def generate(seed, length=2600, difficulty=0.6, template_lid="1_1", lid="5_1"):
             slab["Properties"].update(position=[0.0, 0.0], name="GenGround_%d_%d" % (si, i),
                                       spline=False, tag=1)
             ents.append(slab)
+
+    # SCENERY + OBSTACLES (cloned real prefabs) — appended before the finish/start so
+    # their (index-based) refs stay self-contained; nothing reorders ents afterward.
+    n_decor = decorate(rng, segments, ents, tpl, difficulty) if decor else 0
+    n_barrel = place_barrels(rng, segments, ents, tpl, difficulty) if obstacles else 0
 
     # FINISH at the end of the last segment
     fp = segments[-1][-2] if len(segments[-1]) >= 2 else segments[-1][-1]
@@ -272,13 +426,19 @@ def _cli():
     ap.add_argument("difficulty", nargs="?", type=float, default=0.6)
     ap.add_argument("--template", default="1_1")
     ap.add_argument("--lid", default="5_1", help="MUST match the target slot (e.g. 1_4)")
+    ap.add_argument("--no-decor", action="store_true", help="skip scenery")
+    ap.add_argument("--no-obstacles", action="store_true", help="skip barrels")
     a = ap.parse_args()
     seed = int(a.seed) if a.seed.lstrip("-").isdigit() else a.seed
-    lvl = generate(seed, a.length, a.difficulty, a.template, a.lid)
+    lvl = generate(seed, a.length, a.difficulty, a.template, a.lid,
+                   decor=not a.no_decor, obstacles=not a.no_obstacles)
     json.dump(lvl, open(a.out, "w"))
-    nslab = sum(1 for e in lvl["Entities"] if e["Type"] == "EditorPhysicsObject")
-    print("generated %s  seed=%s len=%.0f diff=%.2f lid=%s  (%d entities, %d slabs, times=%s)"
-          % (a.out, a.seed, a.length, a.difficulty, a.lid, len(lvl["Entities"]), nslab, lvl["times"]))
+    E = lvl["Entities"]
+    nslab = sum(1 for e in E if e["Type"] == "EditorPhysicsObject" and e["Properties"].get("tag") == 1)
+    ndecor = sum(1 for e in E if str(e["Properties"].get("name", "")).startswith(("GenRock", "GenTree", "GenFore")))
+    nbar = sum(1 for e in E if e["Type"] == "ExplosiveBarrel")
+    print("generated %s  seed=%s len=%.0f diff=%.2f lid=%s\n  %d entities: %d slabs, %d decor, %d barrels  times=%s"
+          % (a.out, a.seed, a.length, a.difficulty, a.lid, len(E), nslab, ndecor, nbar, lvl["times"]))
 
 
 if __name__ == "__main__":
