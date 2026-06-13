@@ -152,10 +152,18 @@ over-spine** model — "playable by construction," not by luck:
 
 ## Open questions (TODO research)
 
-- **Level registration**: where are per-world level COUNTS + unlock gates stored?
-  `WorldDefinition.plist` (plaintext) only has panel `visuals` (12 WorldPanelN) +
-  `locks` (3 gate x-positions). Counts/unlock likely in `GameConfig.dat`
-  (config key) or `libgame.so`. Needed for an additive World 5.
+- **World structure (confirmed):** the MAIN world map = `WorldDefinition.plist`
+  (plaintext: 12 `visuals` panels `WorldPanel1-12` + 3 `locks`). **Only worlds 1–4
+  have level files** (`<w>_<l>.dat`: 30/40/45/15 = 130); **World 5 = the empty "?"
+  slot** (`WorldPanel5`/`LevelSelectBK5` exist, no `5_*.dat`). **Halloween &
+  Christmas are SEPARATE worlds** — their own `HalloweenWorldDefinition.plist` /
+  `ChristmasWorldDefinition.plist` (1 panel each), `h_*`/`c_*` level naming,
+  reached via `gotoHalloween/ChristmasWorld` menu items. So `5_*.dat` is safe —
+  it never touches the seasonal worlds.
+- **Level registration (open):** per-world level COUNTS + unlock aren't in
+  `WorldDefinition.plist`. Per-theme `GameConfig_T1..T4.dat` (config key) are the
+  prime suspects (no `GameConfig_T5` exists → World 5 unconfigured). Decode them
+  to learn how to register/enable an additive World 5.
 - **Mod-loader hook**: `-[CCFileUtils fullPathForFilename:]` redirect to an
   external `mods/` dir (game has `getExternalStoragePath`, `/sdcard`).
 - **Why a minimal generated level hung** — ANSWERED by the corpus analysis: the
