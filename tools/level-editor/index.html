@@ -260,8 +260,8 @@ function drawSprite(e){const P=e.Properties||{},pt=posOf(e);if(!pt)return;const 
   // atlas frames are in HD texels (@2x); level coords are points → ÷ content scale
   const scl=(P.scale||1)*view.scale/SPRITE_CS, dw=sw*scl, dh=sh*scl;
   ctx.save(); ctx.translate(wx(pt.x),wy(pt.y)); ctx.rotate((P.rotation||0)*Math.PI/180);
-  if(Array.isArray(P.color)&&P.color.length>=3){/* tint hint via alpha only */}
   ctx.globalAlpha=(P.opacity!=null?P.opacity:1);
+  ctx.scale(1,-1);   // game textures are Y-up; canvas is Y-down → flip content vertically
   if(fm.rotated){ ctx.rotate(Math.PI/2); ctx.drawImage(img,rx,ry,rw,rh,-dh/2,-dw/2,dh,dw); }
   else { ctx.drawImage(img,rx,ry,rw,rh,-dw/2,-dh/2,dw,dh); }
   ctx.restore();}
