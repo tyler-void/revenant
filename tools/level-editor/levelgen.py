@@ -100,6 +100,10 @@ def generate(seed, length=2600, difficulty=0.5, template_lid="1_1"):
     vtx = [{"x": x, "y": y, "segments": 4} for x, y in top]
     vtx.append({"x": length, "y": baseline, "segments": 1})
     vtx.append({"x": 0.0, "y": baseline, "segments": 1})
+    # Box2D needs CCW winding for solid ground (collision solid-side UP); the
+    # top→right→bottom→left order above is CW, so reverse it. (1_1's rideable
+    # terrain is 97/104 CCW — CW makes the bike fall through.)
+    vtx.reverse()
     terrain = {"Type": "EditorPhysicsObject", "Selected": False, "Vertexes": vtx,
                "Properties": copy.deepcopy(tpl["terrain_props"])}
     # position=[0,0] with world-space vertexes is safe whether the game treats
