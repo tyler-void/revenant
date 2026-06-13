@@ -6,6 +6,22 @@ trials game. Public repo: github.com/tyler-void/revenant (owner: Tyler).
 Goal: turn a dead game into a community modding scene (level editor, bike editor,
 custom-content loading) — in the spirit of PvZ2 / Bad Piggies mods.
 
+## 📚 Knowledge model — READ + MAINTAIN these (how modding/decomp scenes track everything)
+
+Four living docs in `docs/` capture the project's knowledge so it's never lost
+(modeled on how decomp/modding projects survive — vision + RE-notes wiki +
+gotchas log + runbook). When you learn or do something important, write it to the
+right one:
+- **[docs/vision.md](docs/vision.md)** — the goal, pillars, principles (the *why*).
+- **[docs/research.md](docs/research.md)** — RE findings: how the game/cipher/format/
+  renderer actually work + open questions (the *what we know*).
+- **[docs/lesson.md](docs/lesson.md)** — gotchas & rules learned, so we don't repeat
+  mistakes (the *how not to fail*).
+- **[docs/steps.md](docs/steps.md)** — copy-paste runbook for every workflow (the *how-to*).
+
+This file (CLAUDE.md) is the agent-facing quick index; the `docs/` files are the
+deeper human/community-facing record. Keep both current.
+
 ## 🔴 SECURITY / LEGAL CONSTRAINTS — never violate
 
 - **NEVER commit cipher keys or decrypted game data** (levels, configs, plaintext).
