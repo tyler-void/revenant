@@ -22,6 +22,28 @@ right one:
 This file (CLAUDE.md) is the agent-facing quick index; the `docs/` files are the
 deeper human/community-facing record. Keep both current.
 
+## 🎯 STANDING DIRECTIVES — do NOT lose these on context compaction
+
+Long-running owner asks that keep getting dropped when context is summarized. They
+persist here so any session picks them up. Detailed findings/plan live in
+**[docs/procgen.md](docs/procgen.md)** (corpus analysis + generator design +
+World-5 registration) — read it before touching the generator or World 5.
+
+1. **Data-driven generator from ALL ~140 levels.** Decode every level (worlds 1–4),
+   analyze how the game actually builds terrain (segment density, slope distribution,
+   spline vs polygon, fill/edge textures) and what makes each level *challenging*
+   (obstacle taxonomy + placement + difficulty progression per world). Feed those
+   real distributions back into `tools/level-editor/levelgen.py`. Corpus re-decode
+   runbook: `docs/steps.md` → "Decode the full level corpus".
+2. **Web + roguelike research.** Keep pulling in external procgen technique (smooth
+   spline/noise terrain, difficulty pacing, solvability, obstacle telegraphing,
+   roguelike variety/encounter-budget); record in `docs/procgen.md`.
+3. **Terrain quality bar (owner feedback):** NO "lazy straight lines", NO over-steep
+   slopes. Terrain must read as hand-authored — smooth rolling ground, rideable grades.
+4. **World 5 = additive custom-level world** hosting the enhanced generator. RE how
+   levels register (`WorldDefinition.plist`, `GameConfig_T%d.dat`, level-count + unlock
+   checks); add world 5 WITHOUT touching Halloween/Christmas (separate worlds, confirmed).
+
 ## 🔴 SECURITY / LEGAL CONSTRAINTS — never violate
 
 - **NEVER commit cipher keys or decrypted game data** (levels, configs, plaintext).

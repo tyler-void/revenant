@@ -29,9 +29,15 @@ import json, os, math, copy, random
 HERE = os.path.dirname(os.path.abspath(__file__))
 CACHE = os.path.join(HERE, "levels")
 
-MAX_SLOPE = 1.05        # rideable grade (dy/dx) for ambient terrain (~46°)
-FLAT_START = 320.0      # spawn flat zone
-FLAT_END = 300.0        # finish flat zone
+# Calibrated against the 130-level corpus (docs/procgen.md): real terrain is a
+# FINELY sampled surface (median 16u between vertices) with mostly gentle rideable
+# grades; steep faces are deliberate features, not ambient. The old generator used
+# coarse ~60-120u steps + a 46° ambient cap → "lazy straight lines, too steep".
+STEP = 26.0             # surface sample spacing (≈ corpus median) → smooth curves
+AMBIENT_SLOPE = 0.62    # gentle rideable grade (~32°) for rolling ground
+RAMP_SLOPE = 1.15       # deliberate launch ramps may exceed ambient (~49°)
+FLAT_START = 340.0      # spawn flat zone
+FLAT_END = 320.0        # finish flat zone
 
 
 # Decoration frames, grouped by depth layer. Only freestanding scenery (no
@@ -117,137 +123,90 @@ def envelope(t):
     return 0.10                                                # resolution
 
 
-# ── chunk emitters: each appends surface points and returns (x, y, gap_width) ─
-def _ramp_clamp(pts, x0, y0, x1, y1):
-    """append a point, clamping the slope from the previous one to rideable."""
-    dx = max(1.0, x1 - x0)
-    dy = max(-MAX_SLOPE * dx, min(MAX_SLOPE * dx, y1 - y0))
-    return x1, y0 + dy
-
-
-def chunk_flat(rng, x, y, d, push, length=None):
-    L = length or rng.uniform(140, 220)
-    n = max(2, int(L / 60))
-    for i in range(1, n + 1):
-        nx = x + L * i / n
-        ny = y + rng.uniform(-4, 4)
-        nx, ny = _ramp_clamp(None, x, y, nx, ny)
-        push(nx, ny); x, y = nx, ny
-    return x, y, 0
-
-
-def chunk_rollers(rng, x, y, d, push):
-    """Smooth rolling hills: a few full sine cycles around the base height."""
-    cycles = rng.randint(2, 3)
-    amp = rng.uniform(28, 55) * (0.5 + 0.8 * d)
-    wl = rng.uniform(150, 230)
-    base = y
-    n = cycles * 8
-    for k in range(1, n + 1):
-        nx = x + (wl * cycles) / n
-        ny = base + amp * math.sin(2 * math.pi * cycles * k / n)
-        nx, ny = _ramp_clamp(None, x, y, nx, ny)
-        push(nx, ny); x, y = nx, ny
-    return x, base, 0
-
-
-def chunk_climb(rng, x, y, d, push):
-    """A hill: rideable climb up to a crest, then back down most of the way."""
-    h = rng.uniform(70, 150) * (0.5 + d)
-    up = rng.uniform(150, 220)
-    for _ in range(4):
-        nx, ny = _ramp_clamp(None, x, y, x + up / 4, y + h / 4)
-        push(nx, ny); x, y = nx, ny
-    for _ in range(4):
-        nx, ny = _ramp_clamp(None, x, y, x + up / 4, y - (h * 0.75) / 4)
-        push(nx, ny); x, y = nx, ny
-    return x, y, 0
-
-
-def chunk_whoops(rng, x, y, d, push):
-    """Rapid bumps (technical / air time): tight alternating up/down."""
-    n = rng.randint(4, 7)
-    amp = rng.uniform(35, 65) * (0.6 + 0.7 * d)
-    wl = rng.uniform(80, 120)
-    base = y
-    for k in range(1, n + 1):
-        nx = x + wl
-        ny = base + (amp if k % 2 == 1 else -amp * 0.45)
-        # subdivide so the clamp doesn't flatten the bump
-        for s in range(1, 4):
-            sx = x + (nx - x) * s / 3; sy = y + (ny - y) * s / 3
-            sx, sy = _ramp_clamp(None, x, y, sx, sy); push(sx, sy); x, y = sx, sy
-    return x, base, 0
-
-
-def chunk_ramp_gap(rng, x, y, d, push):
-    """A launch ramp up to a lip, then a jumpable GAP, then a flat landing.
-    Gap width scales with difficulty but stays within a conservative jump range."""
-    rise = rng.uniform(50, 95) * (0.6 + d)
-    run = rng.uniform(110, 170)
-    # ramp up to a lip (steeper allowed than ambient — it's a deliberate launch)
-    steps = 4
-    for k in range(1, steps + 1):
-        nx = x + run / steps; ny = y + rise / steps
-        push(nx, ny); x, y = nx, ny
-    # GAP — conservative, escalates with difficulty
-    gap = rng.uniform(90, 130) + d * 90
-    return x, y, gap
-
-
-CHUNKS = [
-    ("flat",     0, lambda d: True),
-    ("rollers",  1, lambda d: True),
-    ("climb",    2, lambda d: d > 0.22),
-    ("whoops",   2, lambda d: d > 0.30),
-    ("ramp_gap", 3, lambda d: d > 0.40),
-]
-_EMIT = {"flat": chunk_flat, "rollers": chunk_rollers, "climb": chunk_climb,
-         "whoops": chunk_whoops, "ramp_gap": chunk_ramp_gap}
+# ── terrain: a smooth fine-sampled heightfield + deliberate jump features ─────
+# (replaces the old coarse "chunk" emitters; see docs/procgen.md for the why)
+def _octaves(rng):
+    """A few sine octaves → natural rolling hills (big rolls + medium + small bumps)."""
+    return [(rng.uniform(620, 900), rng.uniform(26, 50), rng.uniform(0, 2 * math.pi)),
+            (rng.uniform(190, 300), rng.uniform(9, 19),  rng.uniform(0, 2 * math.pi)),
+            (rng.uniform(75, 125),  rng.uniform(3, 8),   rng.uniform(0, 2 * math.pi))]
 
 
 def build_segments(rng, length, difficulty):
-    """Returns a list of ground segments (each a list of {x,y,segments} points);
-    gaps are the breaks BETWEEN segments."""
+    """Build the rideable surface as a smooth, finely sampled heightfield, then
+    carve deliberate jump gaps (ramp lip → void → lower landing). Returns a list of
+    ground segments (each a list of {x,y,segments} points); gaps are the breaks
+    between segments. Smoothness comes from fine sampling (STEP≈corpus median) and a
+    gentle ambient slope cap; only carved ramps exceed it."""
+    octs = _octaves(rng)
+    def base(x):
+        return sum(A * math.sin(2 * math.pi * x / W + p) for (W, A, p) in octs)
+
+    # 1) fine smooth points: amplitude follows the difficulty envelope; flat ends.
+    pts = []  # list of [x, y]
+    x = 0.0; prevy = 0.0
+    while x <= length + 0.5:
+        if x <= FLAT_START:
+            y = 0.0
+        elif x >= length - FLAT_END:
+            y = prevy                                   # hold flat into the finish
+        else:
+            amp = (0.45 + 0.95 * envelope(x / length)) * (0.55 + 0.75 * difficulty)
+            y = base(x) * amp
+        if pts:                                         # gentle ambient slope clamp
+            md = AMBIENT_SLOPE * (x - pts[-1][0])
+            y = max(prevy - md, min(prevy + md, y))
+        pts.append([x, y]); prevy = y
+        x += STEP
+
+    # 2) choose jump-gap centres in the ramp→climax region; escalate with difficulty
+    gaps = []
+    if difficulty >= 0.32:
+        ngaps = 1 + int(difficulty * 2.4)
+        cand_t = sorted(rng.uniform(0.40, 0.90) for _ in range(ngaps))
+        last_t = -1
+        for t in cand_t:
+            if t - last_t < 0.12:        # keep jumps spaced out
+                continue
+            last_t = t
+            gaps.append(t * length)
+
+    # 3) carve each gap: raise a takeoff ramp into the lip, void, lower flat landing
+    removed = [False] * len(pts)
+    def idx_at(xx):
+        return min(range(len(pts)), key=lambda i: abs(pts[i][0] - xx))
+    for gx in gaps:
+        d = difficulty * envelope(gx / length)
+        lip = idx_at(gx)
+        if lip < 3 or lip > len(pts) - 6:
+            continue
+        gap_w = rng.uniform(95, 130) + d * 70           # jumpable void width
+        rise = rng.uniform(45, 80) * (0.6 + d)          # takeoff ramp height
+        n_ramp = 3                                       # ramp up over the last few pts
+        lip_y = pts[lip][1] + rise
+        for k in range(n_ramp + 1):                      # linear takeoff ramp to the lip
+            i = lip - n_ramp + k
+            if i >= 0:
+                pts[i][1] = max(pts[i][1], pts[lip - n_ramp][1] + rise * k / n_ramp)
+        pts[lip][1] = lip_y
+        land = idx_at(gx + gap_w)
+        land = max(land, lip + 1)
+        for i in range(lip + 1, land):                   # remove points over the void
+            removed[i] = True
+        land_y = lip_y - rng.uniform(30, 70)             # land lower than the lip
+        for j in range(land, min(land + 4, len(pts))):   # flat-ish landing run
+            pts[j][1] = land_y
+
+    # 4) split into contiguous (non-removed) ground segments
     segments = []; cur = []
-    def push(px, py, seg=2): cur.append({"x": float(px), "y": float(py), "segments": seg})
-    x, y = 0.0, 0.0
-    push(x, y)
-    x, y, _ = chunk_flat(rng, x, y, 0, push, length=FLAT_START)   # spawn zone
-    last = "flat"; gaps_placed = 0
-
-    def do_gap(x, y, d):
-        segments.append(cur[:]); cur.clear()
-        # conservative jump width — launched off the preceding ramp lip; landing
-        # is lower so it's reachable even at modest speed.
-        x += rng.uniform(75, 105) + d * 45
-        y = y - rng.uniform(30, 70)                  # land lower than the lip
-        push(x, y)
-        return chunk_flat(rng, x, y, d, push, length=rng.uniform(140, 200))[:2]  # recovery landing
-
-    while x < length - FLAT_END - 200:
-        t = x / length
-        d = difficulty * envelope(t)
-        cands = [c for c, cost, ok in CHUNKS if ok(d) and not (c == "ramp_gap" and last == "ramp_gap")]
-        weights = []
-        for c in cands:
-            if c == "flat":      w = 0.55 * (1 - d) + 0.10     # rest fades as it gets harder
-            elif c == "rollers": w = 0.7
-            else:                w = (0.25 + d) ** 1.3 * (2.4 if c == "ramp_gap" else 1.2)
-            weights.append(w)
-        chunk = rng.choices(cands, weights=weights)[0]
-        x, y, gap = _EMIT[chunk](rng, x, y, d, push)
-        last = chunk
-        if gap > 0:
-            x, y = do_gap(x, y, d); gaps_placed += 1; last = "flat"
-    # guaranteed climax jump: if it's meant to be challenging but no gap landed, add one
-    if difficulty >= 0.45 and gaps_placed == 0:
-        x, y, gap = chunk_ramp_gap(rng, x, y, difficulty, push)
-        x, y = do_gap(x, y, difficulty); gaps_placed += 1
-    # finish flat zone
-    x, y, _ = chunk_flat(rng, x, y, 0, push, length=FLAT_END)
-    push(length, y)
-    segments.append(cur[:])
+    for i, p in enumerate(pts):
+        if removed[i]:
+            if cur:
+                segments.append(cur); cur = []
+            continue
+        cur.append({"x": float(p[0]), "y": float(p[1]), "segments": 2})
+    if cur:
+        segments.append(cur)
     return segments
 
 
@@ -325,33 +284,46 @@ def decorate(rng, segments, ents, tpl, difficulty):
 
 
 def place_barrels(rng, segments, ents, tpl, difficulty):
-    """Drop ExplosiveBarrel obstacles on gentle ground; count scales with difficulty."""
+    """Drop ExplosiveBarrel obstacles, spread along the track on ridable ground.
+    Count scales with difficulty; spots are spaced so barrels are clearly
+    encountered (not clustered at spawn). The barrel sprite is forced ABOVE the
+    terrain z so the ground fill can never occlude it."""
     barrel = tpl.get("barrel")
     if not barrel:
         return 0
-    count = int(round(difficulty * rng.uniform(2, 5)))
-    placed = 0
+    count = max(2, int(round(difficulty * rng.uniform(4, 7))))
+    # candidate spots on gentle ground, away from segment ends (gaps/finish)
     spots = []
     for seg in segments:
         y_at, x0, x1 = _seg_surface(seg)
-        if x1 - x0 < 200:
+        if x1 - x0 < 180:
             continue
-        x = x0 + 150
-        while x < x1 - 150:
-            if abs(y_at(x + 20) - y_at(x - 20)) < 22:   # near-flat → a fair barrel spot
+        x = max(x0 + 120, FLAT_START + 60)              # keep barrels out of the spawn flat
+        while x < x1 - 120:
+            flat = abs(y_at(x + 20) - y_at(x - 20)) < 30   # near-flat = fair landing
+            if flat:
                 spots.append((x, y_at(x)))
-            x += rng.uniform(120, 220)
-    rng.shuffle(spots)
-    for (bx, by) in spots[:count]:
+            x += rng.uniform(90, 150)
+    if not spots:
+        return 0
+    spots.sort()                                            # spread evenly by x, not clustered
+    stride = max(1, len(spots) // count)
+    chosen = spots[::stride][:count]
+    placed = 0
+    for (bx, by) in chosen:
         kids = [copy.deepcopy(k) for k in barrel["children"]]
         idxs = []
         for k in kids:
-            _translate_entity(k, bx, by + 10)          # barrel sits on the surface
+            _translate_entity(k, bx, by + 8)               # rest on the surface
+            if k.get("Type") == "EditorSprite":            # keep the barrel art in front
+                k["Properties"]["z"] = 6
             idxs.append(len(ents)); ents.append(k)
         grp = copy.deepcopy(barrel["group"])
         grp["Properties"]["refobjectList"] = idxs
         grp["Properties"]["name"] = "GenBarrel%d" % placed
+        grp["Properties"]["z"] = 5
         ents.append(grp); placed += 1
+    return placed
     return placed
 
 
