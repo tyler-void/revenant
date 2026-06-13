@@ -98,7 +98,24 @@ Method table (12-byte entries `{IMP, name_ptr, types_ptr}` at `.data` ~`0xcfd5d0
   ≥8 chars (use `"1/1_1.dat"`). With a fabricated `NSConstantString` path + `forceCallInit`, the IMP
   now runs the FULL decrypt path: **`cipher_setkey` and `cipher_process` both fire.** Set the VFS via
   `AndroidEmulatorBuilder.setRootDir(rootfs)` (builder mutates; call as a statement, not chained).
-  *Refined finding:* `0x64ea98` is really the **data decryptor** — it calls `[arg bytes]`/`[arg length]`
+  ### ✅ WORKING DECRYPTION ORACLE (this session)
+  `LevelDecrypt.java` now does end-to-end ObjC in unidbg: `objc_getClass` (`0x37295c`) →
+  `+[NSData dataWithBytes:length:]` (`0x398c48`) builds a real NSData of the level bytes →
+  `+[NSString stringWithUTF8String:]` (`0x408000`) builds real password strings →
+  the decrypt IMP `0x64ea98` runs `cipher_setkey`+`cipher_process` → result read back via
+  `objc_msgSend(result, "bytes"/"length")`. **The key genuinely applies** (different passwords →
+  different output). Runtime fns: `objc_getClass=0x37295c`, `objc_msgSend=0x3783d4`,
+  `sel_registerName=0x3775e0`, `sel_getUid=0x3774b8`. **The ONLY remaining unknown is the password
+  value** — none of ~30 guesses (incl. filename-derived) decrypts to JSON (~37% printable = wrong).
+  *Leads:* the **config family** (`GameConfig`/`ProductList`/`Shop`/`ConditionInfo`) shares a
+  keystream prefix → a CONSTANT key; levels are per-file (filename likely mixed into the key by the
+  loader). Capture the real key by: (a) triggering the game's level/config loader and hooking
+  `cipher_setkey` (`0x650570`) `r1`; (b) calling the `Encryption` class (`objc_getClass("Encryption")`
+  succeeds — find its password/key method); or (c) finding the loader's constant statically. The
+  oracle can test any candidate instantly. Both `0x64f378`/`0x64ea98` DECRYPT PASSED DATA (neither
+  reads a file — the no-pw decrypts the path string itself; the file read is a separate step).
+
+  *Earlier framing:* `0x64ea98` is the **data decryptor** — it calls `[arg bytes]`/`[arg length]`
   on r2 and decrypts that buffer (it does NOT read a file; passing a path string made it "decrypt" the
   path). Passing a fabricated object over the real level bytes, `cipher_process` runs on real data
   (`len≈55k`). *Last mile:* the fabricated object reused the **NSConstantString** isa (a *string*

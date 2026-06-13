@@ -34,8 +34,13 @@ public class LevelDecrypt {
     static final long PROCESS  = 0x65085cL; // cipher_process(ctx, data, len)
     static final long SEL_REG  = 0x3775e0L; // sel_registerName(char*)
     static final long MSGSEND  = 0x3783d4L; // objc_msgSend(recv, sel, ...)
+    static final long GETCLASS = 0x37295cL; // objc_getClass(char*) — called with "NSData"/"Encryption"
+    static final long DATAWBYTES = 0x398c48L; // +[NSData dataWithBytes:length:]
+    static final long STRWUTF8 = 0x408000L;   // +[NSString stringWithUTF8String:]
+    static long CLS_NSSTRING;
     static final long NSCONST_SRC = 0xc54ad0L;
     static Module MOD;
+    static int NSCONST_ISA;
 
     static AndroidEmulator emulator;
 
@@ -91,22 +96,6 @@ public class LevelDecrypt {
         final Backend backend = emulator.getBackend();
         log("loaded base=0x"+Long.toHexString(base));
 
-        int isa = rd32(base+NSCONST_SRC);
-        // 0x64ea98 decrypts the object passed as r2 (calls [arg bytes]/[arg length]).
-        // Fabricate an NSData-like object {isa, bytesPtr, length} over the real level file bytes.
-        byte[] fileBytes = java.nio.file.Files.readAllBytes(lvl.toPath());
-        MemoryBlock dblk = memory.malloc(fileBytes.length, true);
-        long dataPtr = dblk.getPointer().peer & 0xffffffffL;
-        backend.mem_write(dataPtr, fileBytes);
-        MemoryBlock sblk = memory.malloc(12,true);
-        long sAddr = sblk.getPointer().peer & 0xffffffffL;
-        byte[] st=new byte[12];
-        System.arraycopy(le(isa),0,st,0,4);
-        System.arraycopy(le((int)dataPtr),0,st,4,4);
-        System.arraycopy(le(fileBytes.length),0,st,8,4);
-        backend.mem_write(sAddr, st);
-        log("fabricated data obj @0x"+Long.toHexString(sAddr)+" bytes=0x"+Long.toHexString(dataPtr)+" len="+fileBytes.length);
-
         MOD = module;
         final long dwfpw=(base+DWF_PW)&0xffffffffL, dec=(base+DEC_PW)&0xffffffffL;
         final long setkey=(base+SETKEY)&0xffffffffL, process=(base+PROCESS)&0xffffffffL;
@@ -116,11 +105,10 @@ public class LevelDecrypt {
                 long r1=b.reg_read(ArmConst.UC_ARM_REG_R1).intValue()&0xffffffffL;
                 long r2=b.reg_read(ArmConst.UC_ARM_REG_R2).intValue()&0xffffffffL;
                 long r3=b.reg_read(ArmConst.UC_ARM_REG_R3).intValue()&0xffffffffL;
-                if(address==dwfpw) log("  >> DataWithContentsOfFile:Password:  r0=0x"+Long.toHexString(r0)+" r1=0x"+Long.toHexString(r1)+" r2(path)=0x"+Long.toHexString(r2)+" r3(pw)=0x"+Long.toHexString(r3));
-                else if(address==dec) log("  >> DataDecryptedFromData:Password:  data=0x"+Long.toHexString(r2)+" pw=0x"+Long.toHexString(r3));
+                if(address==dwfpw) log("  >> 0x64ea98 decrypt  r2(data)=0x"+Long.toHexString(r2)+" r3(pw)=0x"+Long.toHexString(r3));
                 else if(address==setkey){
                     log("  >> cipher_setkey(ctx=0x"+Long.toHexString(r0)+", key=0x"+Long.toHexString(r1)+")");
-                    if(r1!=0){ try{ log("       key NSStr[+4]->\""+cstr(rd32(r1+4)&0xffffffffL,48)+"\"  raw=\""+cstr(r1,32)+"\""); }catch(Throwable t){} }
+                    if(r1!=0){ try{ log("       key[+4]->\""+cstr(rd32(r1+4)&0xffffffffL,48)+"\"  raw=\""+cstr(r1,32)+"\""); }catch(Throwable t){} }
                 }
                 else if(address==process) log("  >> cipher_process(ctx=0x"+Long.toHexString(r0)+", data=0x"+Long.toHexString(r1)+", len="+r2+")");
             }
@@ -129,15 +117,59 @@ public class LevelDecrypt {
         };
         for(long a: new long[]{dwfpw,dec,setkey,process}) backend.hook_add_new(hook, a, a+4, null);
 
-        // Call DataWithContentsOfFile:Password: IMP directly (self/_cmd unused), path=fabricated, pw=nil
-        log("=== MY CALL NOW: DWF_PW(self=0,_cmd=0,path=0x"+Long.toHexString(sAddr)+",pw=0) ===");
-        try {
-            Number ret = module.callFunction(emulator, DWF_PW, 0, 0, (int) sAddr, 0); // r0=self,r1=_cmd,r2=path,r3=pw(nil)
-            long r=ret==null?0:ret.longValue()&0xffffffffL;
-            log("DataWithContentsOfFile:Password: returned 0x"+Long.toHexString(r));
-            if(r!=0) dumpNSData(r);
-        } catch(Throwable t){ log("call threw: "+t); }
+        NSCONST_ISA = rd32(base+NSCONST_SRC);
+        long clsNSData = module.callFunction(emulator, GETCLASS, (int)cstrAlloc("NSData")).longValue()&0xffffffffL;
+        CLS_NSSTRING = module.callFunction(emulator, GETCLASS, (int)cstrAlloc("NSString")).longValue()&0xffffffffL;
+        log("objc_getClass NSData=0x"+Long.toHexString(clsNSData)+" NSString=0x"+Long.toHexString(CLS_NSSTRING));
+        // sanity: a real NSString should report the right length
+        long ts=makeNSString("hello"); log("test NSString(\"hello\").length="+module.callFunction(emulator,MSGSEND,(int)ts,(int)module.callFunction(emulator,SEL_REG,(int)cstrAlloc("length")).longValue()).longValue());
+        byte[] fileBytes = java.nio.file.Files.readAllBytes(lvl.toPath());
+
+        // working decryption oracle: try candidate passwords, report printable%
+        String[] cands = {"", "1_1.dat", "1_1", "1/1_1.dat", "bikerivals", "BikeRivals",
+                          "miniclip", "com.miniclip.bikerivals", "Encryption", "[redacted-key]",
+                          "MiniclipBikeRivals", "Profusion", "level", "key", "password",
+                          "bikerivalsbikerivals", "data", "Bike Rivals"};
+        for(String pw : cands){
+            long nsdata = makeNSData(clsNSData, fileBytes);
+            long pwObj = pw.isEmpty()? 0 : makeNSString(pw);
+            long r = module.callFunction(emulator, DWF_PW, 0, 0, (int)nsdata, (int)pwObj).longValue()&0xffffffffL;
+            int pct = (r!=0 && r!=0xffffffffL) ? pctPrintable(r) : -1;
+            log("PW "+String.format("%-26s", pw.isEmpty()?"(nil)":"\""+pw+"\"")+" -> result=0x"+Long.toHexString(r)+"  printable="+pct+"%");
+            if(pct>=85){ log("  *** LIKELY CORRECT ***"); dumpNSData(r); }
+        }
+
+        // CAPTURE the real password: run the game's own no-pw DataWithContentsOfFile: with a REAL
+        // NSString path; it reads the file (rootfs/IOResolver serve it) and, for encrypted files,
+        // decrypts via the Encryption class -> the cipher_setkey hook logs the REAL key it passes.
+        log("=== no-pw capture: DataWithContentsOfFile:(real path) ===");
+        for(String p : new String[]{"1/1_1.dat", "/1/1_1.dat", "1_1.dat"}){
+            long rp = makeNSString(p);
+            long rr = module.callFunction(emulator, DWF_NOPW, 0, 0, (int)rp).longValue()&0xffffffffL;
+            log("  no-pw(\""+p+"\") -> 0x"+Long.toHexString(rr)+(rr!=0&&rr!=0xffffffffL?" printable="+pctPrintable(rr)+"%":""));
+        }
         emulator.close();
+    }
+    static long makeNSString(String s){
+        // build a REAL NSString via +[NSString stringWithUTF8String:] so it responds to every accessor
+        return MOD.callFunction(emulator, STRWUTF8, (int)CLS_NSSTRING, 0, (int)cstrAlloc(s)).longValue()&0xffffffffL;
+    }
+    static long makeNSData(long cls, byte[] bytes){
+        MemoryBlock d=emulator.getMemory().malloc(bytes.length,true);
+        long dp=d.getPointer().peer&0xffffffffL; emulator.getBackend().mem_write(dp,bytes);
+        return MOD.callFunction(emulator, DATAWBYTES, (int)cls, 0, (int)dp, bytes.length).longValue()&0xffffffffL;
+    }
+    static int pctPrintable(long obj){
+        try{
+            long selB=MOD.callFunction(emulator,SEL_REG,(int)cstrAlloc("bytes")).longValue()&0xffffffffL;
+            long selL=MOD.callFunction(emulator,SEL_REG,(int)cstrAlloc("length")).longValue()&0xffffffffL;
+            long ptr=MOD.callFunction(emulator,MSGSEND,(int)obj,(int)selB).longValue()&0xffffffffL;
+            long len=MOD.callFunction(emulator,MSGSEND,(int)obj,(int)selL).longValue()&0xffffffffL;
+            if(ptr==0||len<=0||len>10_000_000) return -1;
+            int n=(int)Math.min(len,2048); byte[] d=emulator.getBackend().mem_read(ptr,n);
+            int pr=0; for(byte x:d){int c=x&0xff; if((c>=32&&c<127)||c==9||c==10||c==13)pr++;}
+            return 100*pr/n;
+        }catch(Throwable t){ return -1; }
     }
     static long cstrAlloc(String s){
         byte[] b=(s+"\0").getBytes();
