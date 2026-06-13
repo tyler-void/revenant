@@ -42,7 +42,13 @@ def _nums(s):
     return [float(x) for x in re.findall(r"-?\d+\.?\d*", s or "")]
 
 def atlas_index():
-    """frameName -> (textureFileName, frame-record). Cached."""
+    """frameName -> {textureFileName: frame-record}. Cached.
+
+    The SAME frame name (bor7.png, ter5.png, …) exists in several per-theme atlases
+    with DIFFERENT art (elements_default = world 1 desert, elements_t2/t3/t4 =
+    worlds 2/3/4, elements_ts1/ts2 = shared specials). So we keep every atlas a
+    frame appears in and pick the right theme at resolve time (see _resolve_frame).
+    """
     global _ATLAS_IDX
     if _ATLAS_IDX is not None:
         return _ATLAS_IDX
@@ -57,9 +63,31 @@ def atlas_index():
             continue
         tex = os.path.basename(p)[:-6] + ".png"   # Foo.plist -> Foo.png
         for name, rec in fr.items():
-            idx.setdefault(name, (tex, rec))
+            idx.setdefault(name, {})[tex] = rec
     _ATLAS_IDX = idx
     return idx
+
+def _world_of(lid):
+    try:
+        return int(str(lid).split("_")[0])
+    except Exception:
+        return 1
+
+def _atlas_priority(world):
+    # world 1's theme atlas is elements_default (there is no elements_t1);
+    # worlds 2-4 use elements_t{N}; ts1/ts2 are shared specials (lower priority).
+    theme = "elements_default.png" if world == 1 else "elements_t%d.png" % world
+    return [theme, "elements_default.png", "elements_ts1.png", "elements_ts2.png"]
+
+def _resolve_frame(name, cands, world):
+    """Pick the theme-correct atlas for a frame from {atlas: rec}."""
+    for a in _atlas_priority(world):
+        if a in cands:
+            return a, cands[a]
+    # fallback: a per-object sheet (Cannon/Checkpoint/…) over a wrong-theme elements_
+    non_elem = [a for a in cands if not a.startswith("elements_")]
+    a = non_elem[0] if non_elem else next(iter(cands))
+    return a, cands[a]
 
 def _frame_geom(rec):
     """Normalise a cocos2d format-3 (or older) frame record → pixel geometry."""
@@ -70,16 +98,17 @@ def _frame_geom(rec):
     return {"rect": tr[:4], "rotated": rot, "offset": off[:2], "source": src[:2]}
 
 def atlas_meta_for_level(level):
-    """Resolve every sprite `frame` in a level to its atlas + pixel geometry."""
+    """Resolve every sprite `frame` to its THEME-correct atlas + pixel geometry."""
     idx = atlas_index()
+    world = _world_of(level.get("lid", "1"))
     frames, atlases = {}, set()
     for e in level.get("Entities", []):
         f = (e.get("Properties") or {}).get("frame")
         if f and f in idx and f not in frames:
-            tex, rec = idx[f]
+            tex, rec = _resolve_frame(f, idx[f], world)
             g = _frame_geom(rec); g["atlas"] = tex
             frames[f] = g; atlases.add(tex)
-    return {"frames": frames, "atlases": sorted(atlases)}
+    return {"frames": frames, "atlases": sorted(atlases), "world": world}
 
 def atlas_texture_path(name):
     """Safe-resolve an atlas texture name to a path under UNPACK (no traversal)."""
