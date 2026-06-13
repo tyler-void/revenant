@@ -292,6 +292,33 @@ several round-trips: the capture command `adb logcat -s RVxx:*` — zsh GLOB-EXP
   find the population loop, then the comingSoon write + world-index condition to patch.
 - Toolkit + base-mapping technique are reusable; the trace pipeline is proven end-to-end.
 
+### WorldPanel internals nailed down (static), but the SET site is dynamic-only
+Parsed `WorldPanel`'s ivar list (file ~0xccb158, 12-byte old-ABI `{name,type,offset}`):
+`_dots`@0x10/0x14, `_firstLevelIndex`(i)@0x18, **`_comingSoon`(c)@0x1c**, `index`(i)@0x20.
+So a WorldPanel knows its world `index` (0x20) and `_comingSoon` (0x1c); comingSoon is
+almost certainly set from `index` at creation.
+- **ZERO immediate `strb [_,#0x1c]` in the whole binary** → comingSoon is written via
+  REGISTER-offset (`strb rVal,[self,rOff]`, rOff = offset loaded from the ivar-offset
+  global, Apportable's non-fragile-style access) — invisible to immediate-offset scans.
+- `_comingSoon`/`_firstLevelIndex`/`_dots` have NO accessor selectors (direct ivar
+  access only), and WorldPanel's init isn't a guessable selector — so WorldPanel.m's
+  code region can't be pinned statically via the method table either.
+- Net: the comingSoon SET is in a WorldPanel creation/setup method reachable only by
+  (a) full ObjC2/old-ABI class-metadata walk (ivar_list→class→methodList; ABI is
+  ambiguous here) or (b) another DYNAMIC trace round.
+
+### Concrete next step (next session/round)
+Find WorldPanel's init/creation, then trace or disassemble it:
+1. Walk the class metadata properly to get WorldPanel's `methodLists` → its init IMP; OR
+2. Hook the LevelSelectionMenu scene-setup (the function that allocs the 12 panels) —
+   log LR at `objc_getClass`/`alloc` calls for the WorldPanel class to find the loop.
+Then read the comingSoon `strb [self,rOff]` + the `index` comparison gating it, and
+patch the world-limit (≥4 → ≥12) so World 5's panel isn't flagged coming-soon.
+
+**STATUS: deep multi-session dynamic-RE in progress.** Toolkit proven, problem narrowed
+to "find WorldPanel's creation method". Pragmatic alternatives for rideable generated
+levels SOONER remain the mod-loader (CCFileUtils redirect) or a designated slot.
+
 ## 5. Open questions / bugs
 - **Barrels not visible on device** (generated W1L4 reported 2 barrels, none seen).
   Check: dynamic-body collision filter vs generated slabs, spawn embedding/ejection,
