@@ -263,15 +263,17 @@ function drawSprite(e){const P=e.Properties||{},pt=posOf(e);if(!pt)return;const 
   const [rx,ry,rw,rh]=fm.rect; const sw=fm.source[0]||rw, sh=fm.source[1]||rh;
   // The game is cocos2d: Y-UP, rotation CLOCKWISE-positive. Our canvas is Y-DOWN.
   // Map a texel-space quad to screen via  S(k,-k)·R_cw(ang)  (k = texel→screen).
+  const ox=(fm.offset&&fm.offset[0])||0, oy=(fm.offset&&fm.offset[1])||0;
   const k=view.scale*(P.scale||1)/SPRITE_CS, a=(P.rotation||0)*Math.PI/180;
   const c=Math.cos(a), s=Math.sin(a);
   ctx.save();
   ctx.translate(wx(pt.x),wy(pt.y));
-  ctx.transform(k*c, k*s, k*s, -k*c, 0, 0);   // world Y-flip + cocos CW rotation
+  ctx.transform(k*c, k*s, k*s, -k*c, 0, 0);   // world Y-flip + cocos CW rotation; frame is Y-up, texel units
   ctx.globalAlpha=(P.opacity!=null?P.opacity:1);
-  // image rows are top-down; this frame is Y-up → flip V with negative dest height
-  if(fm.rotated){ ctx.rotate(Math.PI/2); ctx.drawImage(img,rx,ry,rw,rh,-sh/2,sw/2,sh,-sw); }
-  else { ctx.drawImage(img,rx,ry,rw,rh,-sw/2,sh/2,sw,-sh); }
+  ctx.translate(ox, oy);                       // trim offset: trimmed region is shifted from sprite center
+  // draw the trimmed atlas region at its NATURAL size (rw×rh), V-flipped (image rows top-down vs Y-up)
+  if(fm.rotated){ ctx.rotate(Math.PI/2); ctx.drawImage(img,rx,ry,rw,rh,-rw/2,rh/2,rw,-rh); }
+  else { ctx.drawImage(img,rx,ry,rw,rh,-rw/2,rh/2,rw,-rh); }
   ctx.restore();}
 function drawSpriteDot(e){const pt=posOf(e);if(!pt)return;ctx.fillStyle=css('--sprite');ctx.beginPath();ctx.arc(wx(pt.x),wy(pt.y),2.5,0,7);ctx.fill();}
 function drawTerrain(e){if(e.Type==='EditorPhysicsEntity')return drawMarker(e);const poly=outline(e);if(!poly)return;
@@ -293,9 +295,20 @@ function fillTerrain(e,poly){
   let mnx=1e9,mny=1e9,mxx=-1e9,mxy=-1e9;poly.forEach(p=>{const X=wx(p.x),Y=wy(p.y);mnx=Math.min(mnx,X);mny=Math.min(mny,Y);mxx=Math.max(mxx,X);mxy=Math.max(mxy,Y);});
   ctx.fillRect(mnx,mny,mxx-mnx,mxy-mny);
   ctx.restore();return true;}
-function drawTrigger(e){const pt=posOf(e);if(!pt)return;const sx=wx(pt.x),sy=wy(pt.y),r=(e.Properties||{}).radius||0;
+function drawTrigger(e){
+  if(e.Type==='WaterTrigger') return drawWater(e);
+  const pt=posOf(e);if(!pt)return;const sx=wx(pt.x),sy=wy(pt.y),r=(e.Properties||{}).radius||0;
   ctx.strokeStyle=css('--trigger');ctx.lineWidth=1.3;ctx.setLineDash([4,3]);ctx.beginPath();ctx.arc(sx,sy,Math.max(4,r*view.scale),0,7);ctx.stroke();ctx.setLineDash([]);
   ctx.fillStyle=css('--trigger');ctx.beginPath();ctx.arc(sx,sy,2,0,7);ctx.fill();}
+function drawWater(e){const P=e.Properties||{},pt=posOf(e);if(!pt)return;
+  const w=(P.width||100), h=(P.height||50), cx=pt.x+(P.xOffset||0);
+  const x0=wx(cx-w/2), x1=wx(cx+w/2), yTop=wy(pt.y+h/2), yBot=wy(pt.y-h/2);
+  const X=Math.min(x0,x1), W=Math.abs(x1-x0);
+  const g=ctx.createLinearGradient(0,yTop,0,yBot);
+  g.addColorStop(0,'rgba(90,170,225,0.45)'); g.addColorStop(1,'rgba(40,90,150,0.30)');
+  ctx.fillStyle=g; ctx.fillRect(X,yTop,W,yBot-yTop);
+  ctx.strokeStyle='rgba(150,215,255,0.9)'; ctx.lineWidth=1.5;
+  ctx.beginPath(); ctx.moveTo(X,yTop); ctx.lineTo(X+W,yTop); ctx.stroke();}
 function drawJoint(e){const a=e.Anchors||[];if(!a.length)return;ctx.strokeStyle=css('--joint');ctx.lineWidth=1.3;
   if(a.length>=2){ctx.beginPath();ctx.moveTo(wx(a[0].x),wy(a[0].y));ctx.lineTo(wx(a[1].x),wy(a[1].y));ctx.stroke();}
   a.forEach(an=>{const sx=wx(an.x),sy=wy(an.y);ctx.beginPath();ctx.moveTo(sx-3,sy-3);ctx.lineTo(sx+3,sy+3);ctx.moveTo(sx+3,sy-3);ctx.lineTo(sx-3,sy+3);ctx.stroke();});}
