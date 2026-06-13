@@ -117,16 +117,25 @@ org** (see [PRESERVATION-PLAYBOOK](PRESERVATION-PLAYBOOK.md)) — a repo of comm
 
 ## Open questions to resolve
 
-- The **level/asset codec** (Phase 2) — per-file stream cipher; needs the binary via unidbg. ← blocker.
-- How the **bike roster** is registered — now narrowed to `ProductList.dat`/`Shop.dat` (encrypted, so
-  gated on Phase 2) or `libgame.so`. (Confirmed NOT in a plaintext plist.)
-- Whether **World 5** needs a native patch beyond `WorldDefinition.plist` (level-count/unlock gate) —
-  note the panel-5 UI assets already ship.
+- **Config codec — SOLVED.** unidbg decryption oracle (`tools/unidbg/.../LevelDecrypt.java`, key via
+  `BR_KEY`) + on-device key capture (`build/patch_keylog.py` → logcat). The config key decrypts
+  `ProductList`/`Shop`/`GameConfig`/`ConditionInfo` to 100% XML.
+- **Level codec — OPEN.** Levels use a **separate** cipher (the config key/cipher decrypt none of the
+  142 `.dat` files). Lead: `+[NSArray ArrayWithContentsOfFilePass2:]` ("second pass"). Next: find its
+  `setkey`, re-spin the keylog patch onto it, capture a level's key, decrypt via that path.
+- **Bike roster — ANSWERED.** It's the IAP product list in decrypted `ProductList.dat`
+  (`com.miniclip.bikerivalsbike1–14`, packs, coins).
+- Whether **World 5** needs a native patch beyond `WorldDefinition.plist` (level-count/unlock gate).
 - Custom-level **install UX** — drop-in path vs. mod-menu browser.
 
-## Session log (2026-06-13 autonomous block)
+> Cipher keys + decrypted game data are **circumvention material** → kept local, never committed
+> (see [PRESERVATION-PLAYBOOK](PRESERVATION-PLAYBOOK.md) / [LEGAL.md](LEGAL.md)).
 
-- ✅ **Phase 1 bike editor** built + tested (CLI `bikeedit.py` + web UI `server.py`/`index.html`).
-- ✅ Mapped the asset/data formats → [ASSET-FORMATS.md](ASSET-FORMATS.md) (container, per-file cipher,
-  codec offsets, World-5 assets, element palette, the jackpot config files).
-- 🚧 **Phase 2 spike blocked** — many-time-pad ruled out; needs unidbg Foundation plumbing (Route B).
+## Session log (2026-06-13)
+
+- ✅ **Phase 1 bike editor** built + tested (CLI `bikeedit.py` + web UI). Roster question answered.
+- ✅ Mapped the asset/data formats → [ASSET-FORMATS.md](ASSET-FORMATS.md).
+- ✅ **Config cipher CRACKED** end-to-end: dispatch in unidbg via `forceCallInit`; on-device
+  key capture (Frida is dead here → ARM keylog stub → logcat); decrypts the roster (Phase 1),
+  achievements `ConditionInfo` (Phase 7), shop, game config.
+- ⬜ **Level cipher** is the remaining Phase-2 piece (separate `Pass2` cipher — see above). Banked here.
