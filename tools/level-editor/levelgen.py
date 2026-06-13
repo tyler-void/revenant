@@ -94,7 +94,33 @@ def load_templates(template_lid="1_1"):
 
     return {"terrain_props": tprops, "moto": copy.deepcopy(first("Moto")),
             "camera": copy.deepcopy(first("EditorCamera")), "win": copy.deepcopy(win),
-            "finish_children": finish_children, "decor": decor, "barrel": barrel}
+            "finish_children": finish_children, "decor": decor, "barrel": barrel,
+            "obstacles": _scan_prefab_obstacles(E)}
+
+
+def _scan_prefab_obstacles(primary_E):
+    """Find single-prefab obstacle templates (Spikes/Nitro) — simple position-based
+    entities (no joints/refs). 1_1 lacks them, so fall back to scanning the rest of the
+    decoded cache (any imported level) for the first of each; theme-correct because we
+    only generate world-1-themed levels. Returns {Type: entity-template or None}."""
+    want = {"Spikes": None, "Nitro": None}
+    def take(E):
+        for e in E:
+            t = e.get("Type")
+            if t in want and want[t] is None:
+                want[t] = copy.deepcopy(e)
+    take(primary_E)
+    if any(v is None for v in want.values()):
+        for fn in sorted(os.listdir(CACHE)):
+            if not fn.endswith(".level.json"):
+                continue
+            try:
+                take(json.load(open(os.path.join(CACHE, fn))).get("Entities", []))
+            except Exception:
+                pass
+            if all(v is not None for v in want.values()):
+                break
+    return want
 
 
 def _translate_entity(ent, dx, dy):
@@ -324,6 +350,52 @@ def place_barrels(rng, segments, ents, tpl, difficulty):
         grp["Properties"]["z"] = 5
         ents.append(grp); placed += 1
     return placed
+
+
+def place_obstacles(rng, segments, ents, tpl, difficulty):
+    """Place single-prefab obstacles: Nitro boost pads (safe/helpful, frequent) and
+    Spikes (lethal — conservative, telegraphed on open flats with clear run-up, spaced
+    from each other). Difficulty gates counts. Returns count placed."""
+    obs = tpl.get("obstacles") or {}
+    spike_t, nitro_t = obs.get("Spikes"), obs.get("Nitro")
+    # flat, well-spaced candidate spots away from the spawn flat
+    spots = []
+    for seg in segments:
+        y_at, x0, x1 = _seg_surface(seg)
+        if x1 - x0 < 220:
+            continue
+        x = max(x0 + 160, FLAT_START + 90)
+        while x < x1 - 160:
+            if abs(y_at(x + 28) - y_at(x - 28)) < 24:    # flat + telegraphed run-up
+                spots.append((x, y_at(x)))
+            x += rng.uniform(120, 200)
+    rng.shuffle(spots)
+    used = []
+    def far(x, mind):
+        return all(abs(x - u) > mind for u in used)
+    placed = 0
+    # Nitro: helpful, scales freely with difficulty
+    n_nitro = int(round(difficulty * rng.uniform(2, 4))) if nitro_t else 0
+    for (sx, sy) in spots:
+        if placed >= n_nitro:
+            break
+        if not far(sx, 200):
+            continue
+        e = copy.deepcopy(nitro_t); e["Properties"].update(position=[float(sx), float(sy + 10)],
+                                                            name="GenNitro%d" % placed)
+        ents.append(e); used.append(sx); placed += 1
+    # Spikes: lethal — sparse, only when it's meant to be hard
+    n_spike = int(round(difficulty * rng.uniform(0, 2.2))) if spike_t else 0
+    sp = 0
+    for (sx, sy) in spots:
+        if sp >= n_spike:
+            break
+        if not far(sx, 240):
+            continue
+        e = copy.deepcopy(spike_t); e["Properties"].update(position=[float(sx), float(sy + 6)],
+                                                           name="GenSpike%d" % sp)
+        ents.append(e); used.append(sx); sp += 1
+    return placed + sp
     return placed
 
 
@@ -356,6 +428,7 @@ def generate(seed, length=2600, difficulty=0.6, template_lid="1_1", lid="5_1",
     # their (index-based) refs stay self-contained; nothing reorders ents afterward.
     n_decor = decorate(rng, segments, ents, tpl, difficulty) if decor else 0
     n_barrel = place_barrels(rng, segments, ents, tpl, difficulty) if obstacles else 0
+    n_obs = place_obstacles(rng, segments, ents, tpl, difficulty) if obstacles else 0
 
     # FINISH at the end of the last segment
     fp = segments[-1][-2] if len(segments[-1]) >= 2 else segments[-1][-1]
@@ -409,8 +482,10 @@ def _cli():
     nslab = sum(1 for e in E if e["Type"] == "EditorPhysicsObject" and e["Properties"].get("tag") == 1)
     ndecor = sum(1 for e in E if str(e["Properties"].get("name", "")).startswith(("GenRock", "GenTree", "GenFore")))
     nbar = sum(1 for e in E if e["Type"] == "ExplosiveBarrel")
-    print("generated %s  seed=%s len=%.0f diff=%.2f lid=%s\n  %d entities: %d slabs, %d decor, %d barrels  times=%s"
-          % (a.out, a.seed, a.length, a.difficulty, a.lid, len(E), nslab, ndecor, nbar, lvl["times"]))
+    nnit = sum(1 for e in E if e["Type"] == "Nitro")
+    nspk = sum(1 for e in E if e["Type"] == "Spikes")
+    print("generated %s  seed=%s len=%.0f diff=%.2f lid=%s\n  %d entities: %d slabs, %d decor, %d barrels, %d nitro, %d spikes  times=%s"
+          % (a.out, a.seed, a.length, a.difficulty, a.lid, len(E), nslab, ndecor, nbar, nnit, nspk, lvl["times"]))
 
 
 if __name__ == "__main__":

@@ -152,12 +152,24 @@ procedural-layouts · blackshellmedia.com six-principles.
    real game's many-small-polys structure, but finely sampled so the top reads smooth.
 
 **Obstacles (match the hand-made feel), cloned from real prefabs:**
-- ✅ decorations (trees/rocks/foreground) + ExplosiveBarrel (done; barrels need a
-  device-visibility fix — see open questions).
-- ⏳ **see-saws** (`EditorPhysicsRevoluteJoint` + plank body + `Anchors`) — highest
-  value (the #1 hazard). Clone plank+joint, reposition, remap anchor/body refs.
-- ⏳ water pools (`WaterTrigger`), nitro pads (`Nitro`), spikes (`Spikes`).
+- ✅ decorations (trees/rocks/foreground) + ExplosiveBarrel (barrels spread + sprite
+  z=6 above terrain fill).
+- ✅ **Nitro + Spikes** — SIMPLE single-prefab entities (`{position, prefabName,
+  definition, ...}`, no joints/refs). World-1 prefab names: `Nitro`, `Spikes`.
+  `_scan_prefab_obstacles` pulls templates from the decoded cache (1_1 lacks them, so
+  it scans other imported levels; **import a rich world-1 level like `1_25`** to enable
+  them — `1_25` has 13 barrels / 17 joints / 9 water / nitro / spikes). Placement:
+  nitro frequent on flats (helpful), spikes sparse + telegraphed (lethal). Graceful
+  fallback to none if no cache source.
+- ⏳ **see-saws = ARTICULATED CHAINS, not simple planks.** In the corpus a
+  `RevoluteJoint` links a chain of small ~9×8 dynamic boxes (object_id/object2_id =
+  entity indices of the two linked bodies; o2=None → linked to world). A faithful
+  see-saw/hinged-bridge = clone the whole body-chain + all joints + remap every index.
+  Complex + fragile + needs DEVICE physics testing — deferred until there's a test home.
+- ⏳ water pools (`WaterTrigger`) — simple trigger but needs a terrain BASIN to sit in.
 - Density/mix per the per-world table above; difficulty-gated.
+- ⚠️ **All obstacles need a device test home** (World 5 or a chosen slot) before
+  fairness/feel can be validated — currently blocked on the World-5 gate.
 
 ## 4. World 5 registration (RE — for the additive world)
 
