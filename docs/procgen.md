@@ -271,6 +271,27 @@ This is iterative device work (build hook → install → user navigates → log
 refine), multi-session. Crash risk on partial hacks — build each hook carefully + assert
 the hook-site bytes (like patch_keylog does) before patching.
 
+### DYNAMIC TRACE WORKS (2026-06-13) — toolkit + foothold
+`build/patch_worldtrace.py` = a reusable diagnostic ARM-stub hook (code cave @0xaf745c,
+logs to logcat via the proven `__android_log_print` PLT @0x36b55c). **Gotcha that cost
+several round-trips: the capture command `adb logcat -s RVxx:*` — zsh GLOB-EXPANDS the
+`*` → command aborts → empty file. Use `adb logcat | grep --line-buffered RVxx > f`.**
+- First target `initWithTarget:worldBoundary:`@0x456ff4 NEVER fired at level-select —
+  "worldBoundary" = the **Box2D ride-scene** init (fires on level START), not a UI panel.
+- Re-targeted `getWorldPanelForIndex:`@0x56bacc → **FIRED** at world-select: 3 calls, all
+  index=**105** (≈ a current global LEVEL index, world-3 range — so this is a
+  current-position lookup, NOT the per-world panel iterator), callers (runtime) →
+  static via **load base 0xb8fc0000** (from `/proc/<pid>/maps`, `r-xp …libgame.so`):
+  `0x562b80`, `0x56ac88`, `0x5669c4` — all in the LevelSelectionMenu display region
+  `0x562xxx–0x56bxxx`.
+- comingSoon is written via the non-fragile-ivar global (no immediate `strb [_,#0x1c]`)
+  and the world limit isn't a plain `cmp #4/#5` in that region → both are runtime/ivar.
+- **NEXT trace target: panel CREATION** (where `_comingSoon` is SET) — hook the
+  LevelSelectionMenu scene setup / `WorldPanel`'s REAL init (find via the WorldPanel
+  class method list; `initWithTarget:worldBoundary:` was a red herring). Log LR there to
+  find the population loop, then the comingSoon write + world-index condition to patch.
+- Toolkit + base-mapping technique are reusable; the trace pipeline is proven end-to-end.
+
 ## 5. Open questions / bugs
 - **Barrels not visible on device** (generated W1L4 reported 2 barrels, none seen).
   Check: dynamic-body collision filter vs generated slabs, spawn embedding/ejection,
