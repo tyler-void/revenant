@@ -112,14 +112,43 @@ Key transferable principles being applied:
 ## 4. World 5 registration (RE — for the additive world)
 
 Goal: add a 5th world hosting generated levels without disturbing existing worlds
-or Halloween/Christmas. To determine (RE `WorldDefinition.plist`, `GameConfig_T%d.dat`,
-and the native level-count/unlock checks):
-- How `WorldDefinition.plist` lists worlds & their level counts.
-- Whether a `GameConfig_T5.dat` (theme config) is needed and how to mint one.
-- The native unlock/level-count gates (`isWorldUnlocked:` already forced YES;
-  need the per-world level COUNT source so W5 shows N generated levels).
+or Halloween/Christmas.
 
-*(Findings appended here as the RE proceeds.)*
+### What we know (confirmed)
+- **`WorldDefinition.plist`** lists **12 visual panels** (`WorldPanel1–12.ccbi` +
+  `LevelSelectBK1–12.png`) and 3 `locks`. Worlds 1–4 have levels; 5–12 are visual
+  slots. Halloween/Christmas have their OWN definitions (1 panel each) — separate.
+- **`WorldPanel5.ccbi` … `WorldPanel12.ccbi` all SHIP in the assets** — the
+  level-select panels for the empty worlds already exist. World 5's UI is present.
+- Level files load by the path format **`%d/%d_%d.dat`** (world / world_level) — also
+  `%d_%d/%d_%d_%d.dat`. Our levels are `<w>_<l>.dat`; lid must match (`5_1`, `5_2`, …).
+- **Unlock gate** `isWorldUnlocked:` @0x6b0df0 + `isUniverseUnlocked:` @0x6a5094 are
+  already force-YES in `apply_patches.py`.
+- Per-world setup goes through **`createLevelInfo:universe:levels:starting:`**
+  @0x6b643c — each world is registered with a `levels:` COUNT and `starting:` global
+  offset. The CALLER of this holds the per-world counts (corpus shows W1=30, W2=40,
+  W3=45, W4=15). **Open: find that caller (xref to 0x6b643c) — that's where to add a
+  world-5 entry, or patch a count.**
+- `getTotalLevels:` @0x6a6190 computes a total per **universe** (arg: 0/1/2 = game
+  mode, NOT world) via msgSend×multiplier (×10, ×15) — universe-level, not the
+  per-world count we need. The per-world count lives at the createLevelInfo caller.
+
+### Open questions / risks
+- **Is per-world level count a fixed table or derived from which `<w>_<l>.dat` exist?**
+  Fastest answer = EMPIRICAL: drop in `5_1.dat` (+`5_2`…), force unlock, navigate to
+  world 5 on-device, watch logcat. If it shows the level(s), counts may be
+  file-driven or the panel reads them directly; if not, trace the createLevelInfo
+  caller and add/patch the world-5 count.
+- **Theme/config:** worlds 1–4 use `GameConfig_T1–T4.dat` (50-byte config key). World 5
+  may need a `GameConfig_T5.dat` (mint by cloning/re-encrypting T1) or it falls back.
+  A missing theme config is a likely crash source on first world-5 load — test for it.
+- **Level-select navigation** to world 5 is a UI action (user taps) — verify on device.
+
+### Plan
+1. Generate `5_1.dat … 5_N.dat` (enhanced generator, lid `5_M`, rising difficulty).
+2. Drop into `assets/unpack/`, build, install, navigate to world 5, read logcat.
+3. If it loads → done (file-driven). If not → trace createLevelInfo caller, patch the
+   world-5 count (and/or mint `GameConfig_T5.dat`), retest.
 
 ## 5. Open questions / bugs
 - **Barrels not visible on device** (generated W1L4 reported 2 barrels, none seen).
