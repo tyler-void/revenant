@@ -141,7 +141,7 @@
     <button class="tool" id="bArt" title="Toggle sprite art" onclick="toggleArt()">🖼</button>
     <button class="tool" id="bFit" title="Frame all (A)" onclick="frameAll()">⤢</button>
     <span class="sep"></span>
-    <label style="font-size:11px;color:var(--text-muted)" title="sprite content-scale (texels→units); tune to match the green outline">scale<input type="number" id="cscale" value="4" step="0.5" min="0.5" style="width:48px;margin-left:4px" oninput="SPRITE_CS=Math.max(0.1,+this.value)||4;draw()"></label>
+    <label style="font-size:11px;color:var(--text-muted)" title="sprite content-scale (texels→units); tune to match the green outline">scale<input type="number" id="cscale" value="8.5" step="0.5" min="0.5" style="width:48px;margin-left:4px" oninput="SPRITE_CS=Math.max(0.1,+this.value)||8.5;draw()"></label>
     <span class="grow"></span>
     <input id="key" type="password" placeholder="level key (hex)" title="needed to Export; stored locally, never committed">
     <button id="saveBtn" onclick="save()" disabled>Save</button>
@@ -202,9 +202,8 @@ function nameOf(e){const n=(e.Properties||{}).name; return (n&&String(n).trim())
 let LID=null,LEVEL=null,ENTS=[],selected=null,dirty=false;
 let view={x:0,y:0,scale:1}, tool='select';
 let showGrid=true, snap=false, snapStep=20, showArt=true;
-let SPRITE_CS=4;     // atlas content-scale: texels → level units (2× retina × 2× level scale).
-                     // calibrated from a mounted sprite (t1_wheel 203px → fits a 61u bar at ÷4).
-                     // live-tunable via the toolbar so you can match the green outline.
+let SPRITE_CS=8.5;   // atlas content-scale: texels → level units. Calibrated by eye
+                     // against the green outline (≈8.5). Live-tunable via the toolbar.
 let hidden=new Set(), collapsed=new Set(BIG_GROUPS), foldOpen={Transform:true,Identity:true,Physics:true,Appearance:true,'Type-specific':true,Vertexes:true};
 let KEYS={}, FRAMES={}, ATLAS={};   // atlas frame meta + Image objects
 let FILLTEX={};                      // terrain fill textures (name → Image)
@@ -261,14 +260,18 @@ function drawGrid(){const b=s2w(0,0),e=s2w(cv.width,cv.height);
   draw1(step,css('--grid-minor')); draw1(step*5,css('--grid-major'));}
 function drawSprite(e){const P=e.Properties||{},pt=posOf(e);if(!pt)return;const fm=FRAMES[P.frame],img=fm&&ATLAS[fm.atlas];
   if(!fm||!img||!img.complete||!img.naturalWidth){return drawSpriteDot(e);}
-  const [rx,ry,rw,rh]=fm.rect; let sw=fm.source[0]||rw, sh=fm.source[1]||rh;
-  // atlas frames are in HD texels (@2x); level coords are points → ÷ content scale
-  const scl=(P.scale||1)*view.scale/SPRITE_CS, dw=sw*scl, dh=sh*scl;
-  ctx.save(); ctx.translate(wx(pt.x),wy(pt.y)); ctx.rotate((P.rotation||0)*Math.PI/180);
+  const [rx,ry,rw,rh]=fm.rect; const sw=fm.source[0]||rw, sh=fm.source[1]||rh;
+  // The game is cocos2d: Y-UP, rotation CLOCKWISE-positive. Our canvas is Y-DOWN.
+  // Map a texel-space quad to screen via  S(k,-k)·R_cw(ang)  (k = texel→screen).
+  const k=view.scale*(P.scale||1)/SPRITE_CS, a=(P.rotation||0)*Math.PI/180;
+  const c=Math.cos(a), s=Math.sin(a);
+  ctx.save();
+  ctx.translate(wx(pt.x),wy(pt.y));
+  ctx.transform(k*c, k*s, k*s, -k*c, 0, 0);   // world Y-flip + cocos CW rotation
   ctx.globalAlpha=(P.opacity!=null?P.opacity:1);
-  ctx.scale(1,-1);   // game textures are Y-up; canvas is Y-down → flip content vertically
-  if(fm.rotated){ ctx.rotate(Math.PI/2); ctx.drawImage(img,rx,ry,rw,rh,-dh/2,-dw/2,dh,dw); }
-  else { ctx.drawImage(img,rx,ry,rw,rh,-dw/2,-dh/2,dw,dh); }
+  // image rows are top-down; this frame is Y-up → flip V with negative dest height
+  if(fm.rotated){ ctx.rotate(Math.PI/2); ctx.drawImage(img,rx,ry,rw,rh,-sh/2,sw/2,sh,-sw); }
+  else { ctx.drawImage(img,rx,ry,rw,rh,-sw/2,sh/2,sw,-sh); }
   ctx.restore();}
 function drawSpriteDot(e){const pt=posOf(e);if(!pt)return;ctx.fillStyle=css('--sprite');ctx.beginPath();ctx.arc(wx(pt.x),wy(pt.y),2.5,0,7);ctx.fill();}
 function drawTerrain(e){if(e.Type==='EditorPhysicsEntity')return drawMarker(e);const poly=outline(e);if(!poly)return;
