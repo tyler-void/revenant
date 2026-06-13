@@ -1,0 +1,26 @@
+REVENANT — Notice of Ownership & Scope
+========================================
+
+Copyright (c) 2026 Tyler.
+
+All ORIGINAL work in this repository — analysis, documentation, patch scripts,
+byte offsets, build tooling, and the unidbg harness — is the author's own work,
+licensed as:
+
+  * Code           -> GNU General Public License v3.0   (see LICENSE)
+  * Documentation  -> CC BY-SA 4.0   (https://creativecommons.org/licenses/by-sa/4.0/)
+
+SCOPE — read this carefully:
+This license covers ONLY the author's original work. It does NOT cover, and the
+author claims NO rights in, "Bike Rivals" or any part of it. The game, its
+assets, and its decompiled/disassembled code remain (c) Miniclip / Profusion
+Studios. NONE of those copyrighted bytes are included in this repository (the
+.gitignore enforces this). A legally obtained copy of the original game is
+required to use the build pipeline; this repository cannot be used to obtain or
+play the game.
+
+Not affiliated with, authorized by, endorsed by, or associated with Miniclip.
+All trademarks are the property of their respective owners.
+
+This is a non-commercial preservation / interoperability research project.
+Nothing here is legal advice (see docs/LEGAL.md).

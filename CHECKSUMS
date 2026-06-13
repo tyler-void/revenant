@@ -1,0 +1,11 @@
+# Expected SHA-256 of the CLEAN original Bike Rivals 1.5.2 APK.
+#
+# This repository ships NO game bytes. You must supply your own legally-owned
+# copy. Place it at:  base/Bike+Rivals_1.5.2_APKPure.apk
+#
+# build.sh verifies this hash before doing anything — and refuses to build from
+# the wrong file, including the malware "mod" APKs that circulate online.
+#
+# Verify manually (run from base/):  sha256sum -c ../CHECKSUMS
+
+a4272b06fc39e1f0335eb3dfb1b1cc846880cdde0cf49b2c7052d1a9fdcdc9e9  Bike+Rivals_1.5.2_APKPure.apk

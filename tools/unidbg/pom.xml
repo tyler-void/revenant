@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.resurrect</groupId>
+    <artifactId>bikerivals-unidbg</artifactId>
+    <version>1.0</version>
+    <packaging>jar</packaging>
+
+    <properties>
+        <maven.compiler.source>17</maven.compiler.source>
+        <maven.compiler.target>17</maven.compiler.target>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    </properties>
+
+    <dependencies>
+        <!-- unidbg-android 0.9.8 pairs with unicorn 1.0.14, whose prebuilt
+             linux_64 native self-defines the TCG helper symbols (helper_div_i32
+             etc). unicorn 1.0.15's prebuilt (pulled by unidbg 0.9.9) has those
+             symbols UNDEFINED -> UnsatisfiedLinkError. So pin to 0.9.8. -->
+        <dependency>
+            <groupId>com.github.zhkl0228</groupId>
+            <artifactId>unidbg-android</artifactId>
+            <version>0.9.8</version>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+                <version>3.1.0</version>
+                <configuration>
+                    <mainClass>com.resurrect.BikeRivalsRunner</mainClass>
+                    <systemProperties>
+                        <systemProperty>
+                            <key>java.library.path</key>
+                            <value>${project.basedir}/natives</value>
+                        </systemProperty>
+                    </systemProperties>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>

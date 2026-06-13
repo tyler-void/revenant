@@ -1,0 +1,45 @@
+# ════════════════════════════════════════════════════════════════════════
+#  COPYRIGHTED MATERIAL — never committed. This repo ships ONLY original work
+#  (analysis, patch scripts, byte offsets, build tooling, docs). It does NOT
+#  redistribute Miniclip's game, its assets, or decompiled game code.
+#
+#  NOTE: gitignore does NOT support inline comments. Every pattern is on its
+#  own line; descriptions live on the comment line ABOVE the pattern.
+# ════════════════════════════════════════════════════════════════════════
+
+# original Bike Rivals APK (© Miniclip)
+base/
+# built / modified APKs (contain © assets)
+dist/
+# apktool-decoded APK (© assets, smali, native libs)
+build/work/
+build/_signed/
+build/_unsigned.apk
+build/_unsigned*.apk
+# decompiled game code (© Miniclip) + the malware sample
+decompiled/
+# reference dump: decompiled © smali/manifest AND a nested git repo whose
+# remote (github.com/tyler-void/re-stuffs) + commit author would leak identity
+ref/
+
+# any game binary, anywhere
+*.apk
+*.apk.idsig
+*.dex
+*.so
+
+# ── secrets ──────────────────────────────────────────────────────────────
+# signing keys — generate your own (see build.sh)
+build/keystore/
+*.keystore
+*.jks
+
+# ── build artifacts ──────────────────────────────────────────────────────
+tools/unidbg/target/
+tools/unidbg/natives/
+*.class
+
+# ── local junk ───────────────────────────────────────────────────────────
+Screenshot_*.jpg
+.DS_Store
+/tmp/
