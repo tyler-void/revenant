@@ -73,20 +73,70 @@ tricks. **W4** = fewer props, tighter/faster (precision).
   Shorter = tighter execution. W4 is the speed/precision wall.
 - Obstacle *density* peaks at W2; W4 trades density for tight timing.
 
-## 2. Web / roguelike research
+## 2. Web / roguelike research (synthesized, with sources)
 
-(Folded in from the background research agent — see "Generator redesign".)
-Key transferable principles being applied:
-- **Smooth terrain:** layered/octave sine or value-noise heightfield + Catmull-Rom,
-  fine sampling, slope-limited — never piecewise-linear coarse segments.
-- **Pacing:** warm-up → ramp → climax → resolution; rest beats between hard sections
-  (rhythm-based, Canabalt/Spelunky lineage).
-- **Solvability by construction** + optional headless verify; projectile math for
-  jumpable gaps.
-- **Obstacle placement:** density curve, spacing rules, telegraphing, anchor hazards
-  to terrain features (after a ramp / on a flat).
-- **Roguelike:** seeded determinism, encounter budget, set-pieces vs filler,
-  variety/non-repetition.
+Researched 2D-trials/platformer + roguelike procgen. The recommended pipeline and
+the principles we're applying:
+
+### Terrain (the "lazy/harsh" fix), in priority order
+1. **fBm heightfield** — sum of octaves of 1-D noise: each octave ×2 frequency
+   (lacunarity≈2), ×0.5 amplitude (persistence≈0.5). High-freq detail carries LOW
+   amplitude → rolling hills, not jagged noise. 3–4 octaves + persistence 0.5 = the
+   gentle end we want. `base_freq` sets hill wavelength. (Our sine-octave `base()` is
+   the same idea; could swap to true value-noise + warp for less regularity.)
+   [aparis69 noise-for-terrains], [arpit 1D terrain], [GameGeniusLab Perlin].
+2. **Neighborhood-average smoothing pass** (radius≈2, 1–3 passes) to kill residual
+   spikes — cheap. [Codementor 2D-terrain-smoothing]. *(queued — not yet in our gen)*
+3. **Slope clamp AND curvature clamp.** Clamping only slope then snapping flat feels
+   harsh; ALSO clamp the *change in slope* between consecutive segments (2nd
+   derivative), then average once more. This is what separates "rolling" from
+   "kinked". *(we clamp slope; curvature clamp queued — high value)*
+4. **Midpoint displacement** is an alternative whose single roughness/H exponent is a
+   clean smooth↔jagged dial. [Steve Losh], [diamond-square].
+5. **Centripetal Catmull-Rom (α=0.5), NOT uniform** — uniform CR overshoots and can
+   form cusps/loops when control points are close/sharp → spline dives below ground or
+   spikes into a wall. Centripetal provably cannot. Matters only if we move terrain to
+   `spline=True` control points (we emit `spline=False` quad slabs today).
+   [Centripetal Catmull-Rom (wiki)], [splines.readthedocs properties].
+
+### Pacing — the rhythm-group model
+Design the *experience* first (a sequence of "beats" = jump/ramp/barrel/see-saw and
+"rests" = flats), THEN synthesize geometry to fit it. Macro arc warm-up→ramp→climax→
+run-out, with an intensity curve = upward envelope × local sawtooth so there are
+**rest valleys between hard sections** (constant pressure exhausts players). Drive
+every parameter (roughness, gap width, ramp angle, obstacle density) off one
+`intensity(progress)`. [Smith LaunchPad TCIAIG-2011], [Compton&Mateas AIIDE-2006],
+[orcunnisli endless-runner curves]. *(we have an envelope; rest-valley sawtooth queued)*
+
+### Solvability / fairness
+Construction-based guarantee (only connect a feature reachable from the previous one)
++ projectile math for gaps: `range = v²·sin(2θ)/g`; validate at MIN realistic entry
+speed with a 0.7× safety margin (comfortably clearable, not pixel-perfect). Headless
+physics sim with an auto-driver as a reject-bad-seeds fallback. [kode80],
+[GameDev.net platformer PCG], [GameDevMath projectile].
+
+### Obstacle placement
+Place relative to terrain FEATURES, not random x (barrel in a valley / just past a
+landing; see-saw on a flat shelf). Density ∝ intensity. **No two hazards adjacent**
+(classic impassable bug). **Telegraph**: a hazard needs visible run-up ∝ approach
+speed (never behind a blind crest). **Introduce-then-test**: a new hazard type first
+appears in a safe spot, later in a punishing one. [Pixelfield], [Wayline].
+
+### Roguelike lessons
+Set-pieces vs filler (build+validate skeleton, THEN drop authored prefabs —
+`ComposedSprite`/`EditorPhysicsEntity` are our set-piece primitive); variety via a
+template SET + down-weight recently-used; **encounter budget** (total challenge budget
+scaled by difficulty, spent across segments); seeded determinism (have it);
+reject-and-regenerate any track whose measured metrics fall outside target ranges.
+[Cogmind procedural-layouts], [BlackShellMedia six-principles].
+
+Sources (full URLs): aparis69.github.io noise-for-terrains · arpit.substack.com 1D
+terrain · stevelosh.com midpoint-displacement · en.wikipedia.org
+Centripetal_Catmull–Rom_spline · codementor.io 2D-terrain-smoothing · users.soe.ucsc.edu
+Smith LaunchPad + Compton&Mateas · orcunnisli.com endless-runner-difficulty · kode80.com
+level-generation · gamedev.net platformer-PCG · gamedevmath.com projectile-motion ·
+pixelfield.co.uk best-practices · wayline.io game-feel · gridsagegames.com
+procedural-layouts · blackshellmedia.com six-principles.
 
 ## 3. Generator redesign (from the data)
 
