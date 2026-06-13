@@ -53,3 +53,7 @@ Screenshot_*.jpg
 .playwright-mcp/
 # level-render screenshots (derived from decrypted level data)
 lvl_*.png
+
+# scratch render-capture screenshots (contain derived level art — local only)
+/*.png
+.playwright-mcp/
