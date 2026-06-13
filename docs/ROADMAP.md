@@ -21,7 +21,7 @@ re-encrypt with the game's own writer. The plaintext is JSON (Catmull-Rom spline
 |---|---|---|---|
 | 1 | **Bike editor** (modify + clone-to-create bikes) | 🟢 Easy | ✅ editor done (CLI + web UI); new-bike *roster registration* gated on Phase 2 |
 | 2 | **Level-decrypt spike** (unidbg → JSON → schema) | 🟡 Medium | 🚧 blocked — cipher is per-file (many-time-pad **ruled out**); needs the binary codec via unidbg. See [ASSET-FORMATS](ASSET-FORMATS.md) |
-| 3 | **Level editor** (splines + object palette → re-encrypt) | 🟡 Medium | 🔬 |
+| 3 | **Level editor** (splines + object palette → re-encrypt) | 🟡 Medium | 🚧 viewer + full decode/encode round-trip DONE (edit→.dat verified); editing UI next |
 | 4 | **World 5 = Custom/Community Levels** (the delivery mechanism) | 🟡 Medium | 🔬 |
 | 5 | **Procedural level generator** (random/seeded tracks) | 🟡 Medium | 🔬 |
 | 6 | **ImGui mod menu** (in-game hub: live tuning) | 🟠 Med-Hard | ⬜ |
@@ -67,11 +67,29 @@ materialize the refs or the ObjC method IMPs). **So decryption requires the bina
 unidbg, passing an `NSString` path, and read the returned `NSData`. The remaining work is Foundation
 object construction in unidbg. Codec/loader offsets are catalogued in ASSET-FORMATS.
 
-### Phase 3 — Level editor 🔬
+### Phase 3 — Level editor 🚧
 
-PC editor (web/desktop): decrypt a level → render the Catmull-Rom spline + objects → drag control
-points, drop elements from the palette (`elements_default.plist`: terrain `ter1-20`, ramps, `ring`,
-`checkpoint`, `finish`) → export JSON → re-encrypt via the game's writer. See [LEVEL-MAKER](LEVEL-MAKER.md).
+PC editor (web): decrypt a level → render the Catmull-Rom spline + objects → drag control points,
+drop elements from the palette → export JSON → re-encrypt via the game's cipher.
+
+**Status (2026-06-13):**
+- ✅ **VIEWER works** (`tools/level-editor/`: `leveldec.py` + `server.py` :8778 + canvas `index.html`).
+  Decodes a real `.dat` (decrypt→gunzip→bplist) and renders the scene — Catmull-Rom terrain, sprite/
+  trigger/joint/marker layers, pan-zoom, entity inspector, medal times. Coordinate model verified:
+  `EditorPhysicsObject.Vertexes` are world-space, `spline:True`→curve else polygon.
+- ✅ **Decrypt oracle solid**: `tools/unidbg/.../LevelCodec.java` (`BR_MODE=decrypt`), driven by
+  `leveldec.py import`. Per-level key via `BR_KEY` (never committed).
+- ✅ **Re-encrypt SOLVED** (`leveldec.py export`). The cipher is **Blowfish** with mirror-image
+  process pairs: DECRYPT `cipher_process` @ 0x65085c (block 0x650ca8) and **ENCRYPT** `cipher_process`
+  @ 0x6507d4 (block 0x6508e4). Framing: `file = "<declLen>\0" + filler-to-offset-8 +
+  cipher_process_ENCRYPT(gzip plaintext padded ×8)` (cipher region always starts at file[8]).
+  **Round-trip verified**: an edited level (changed medal times + moved start) re-encrypts to a `.dat`
+  that the game's own decryptor reads back with the edits intact and zero collateral changes.
+- ⬜ Editing UI (drag control points, object palette, edit props/times) — builds on the viewer; the
+  decode↔encode pipeline under it is done.
+- ✅ **Device-verified** (2026-06-13): an edited 1_1 (start moved up, medal times set to 999) was
+  re-encrypted, rebuilt, and installed — on real hardware the bike visibly drops in at spawn and all
+  medal times read 999. The full `decode → edit → re-encrypt → device-loadable .dat` loop works.
 
 ### Phase 4 — World 5 = Custom / Community Levels ⭐🔬
 

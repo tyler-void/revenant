@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>🗺️ Revenant Level Viewer</title>
+<style>
+  :root{
+    --bg:#1e1e2e; --mantle:#181825; --crust:#11111b; --surface:#313244; --surface2:#45475a;
+    --text:#cdd6f4; --sub:#a6adc8; --blue:#89b4fa; --green:#a6e3a1; --yellow:#f9e2af;
+    --peach:#fab387; --mauve:#cba6f7; --red:#f38ba8; --teal:#94e2d5; --pink:#f5c2e7;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{font:13px/1.5 ui-monospace,'JetBrains Mono',Menlo,monospace;background:var(--bg);color:var(--text);overflow:hidden}
+  header{padding:10px 16px;background:var(--crust);border-bottom:1px solid var(--surface);display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+  header h1{margin:0;font-size:16px;white-space:nowrap}
+  header select{background:var(--surface);color:var(--text);border:1px solid var(--surface2);border-radius:6px;padding:4px 8px;font:inherit}
+  .medals{color:var(--sub);font-size:12px}
+  .medals b{color:var(--yellow)}
+  .wrap{display:flex;height:calc(100vh - 49px)}
+  .side{width:230px;background:var(--mantle);border-right:1px solid var(--surface);padding:10px;overflow:auto;flex:none}
+  .side h3{margin:6px 0 4px;color:var(--peach);font-size:12px;text-transform:uppercase;letter-spacing:.05em}
+  .layer{display:flex;align-items:center;gap:8px;padding:3px 4px;border-radius:6px;cursor:pointer}
+  .layer:hover{background:var(--surface)}
+  .layer .sw{width:12px;height:12px;border-radius:3px;flex:none}
+  .layer .ct{margin-left:auto;color:var(--sub);font-size:11px}
+  .layer input{accent-color:var(--mauve)}
+  .stage{flex:1;position:relative;overflow:hidden}
+  canvas{display:block;width:100%;height:100%;cursor:grab}
+  canvas.drag{cursor:grabbing}
+  .hud{position:absolute;left:10px;bottom:10px;background:rgba(17,17,27,.8);border:1px solid var(--surface);border-radius:6px;padding:6px 10px;color:var(--sub);font-size:11px;pointer-events:none}
+  .insp{width:300px;background:var(--mantle);border-left:1px solid var(--surface);padding:10px;overflow:auto;flex:none}
+  .insp h3{margin:0 0 6px;color:var(--teal);font-size:13px}
+  .insp .ty{color:var(--peach);font-weight:700}
+  .insp table{width:100%;border-collapse:collapse;font-size:11.5px}
+  .insp td{padding:2px 4px;vertical-align:top;border-bottom:1px solid var(--surface)}
+  .insp td.k{color:var(--sub);white-space:nowrap}
+  .insp td.v{color:var(--green);word-break:break-word}
+  .insp .empty{color:var(--sub)}
+  .btns{margin-top:8px;display:flex;gap:6px;flex-wrap:wrap}
+  .btns button{background:var(--surface);color:var(--text);border:1px solid var(--surface2);border-radius:6px;padding:4px 8px;font:inherit;cursor:pointer}
+  .btns button:hover{background:var(--surface2)}
+  code{color:var(--peach)}
+</style>
+</head>
+<body>
+<header>
+  <h1>🗺️ Revenant — Level Viewer</h1>
+  <select id="lvlSel"></select>
+  <span class="medals" id="medals"></span>
+</header>
+<div class="wrap">
+  <div class="side">
+    <h3>Layers</h3>
+    <div id="layers"></div>
+    <h3 style="margin-top:14px">View</h3>
+    <div class="btns">
+      <button onclick="fitToView();draw()">⤢ Fit</button>
+      <button onclick="toggleLabels()">🏷 Labels</button>
+    </div>
+    <h3 style="margin-top:14px">Legend</h3>
+    <div id="legend" style="font-size:11px;color:var(--sub)"></div>
+  </div>
+  <div class="stage">
+    <canvas id="cv"></canvas>
+    <div class="hud" id="hud"></div>
+  </div>
+  <div class="insp">
+    <h3>Inspector</h3>
+    <div id="inspBody"><p class="empty">Click an entity to inspect its properties.</p></div>
+  </div>
+</div>
+<script>
+const $=s=>document.querySelector(s);
+const cv=$('#cv'), ctx=cv.getContext('2d');
+
+// ── layer definitions ───────────────────────────────────────────────────────
+const LAYERS = {
+  terrain:  {label:'Terrain (physics)', color:'#a6e3a1', on:true},
+  sprites:  {label:'Sprites',           color:'#89b4fa', on:true},
+  triggers: {label:'Triggers',          color:'#f9e2af', on:true},
+  joints:   {label:'Joints',            color:'#cba6f7', on:true},
+  markers:  {label:'Start / Win / Cam', color:'#f5c2e7', on:true},
+};
+let LEVEL=null, ENTS=[], showLabels=false, selected=null;
+let view={x:0,y:0,scale:1};   // world coord at screen-center, px per world unit
+
+// ── classification ──────────────────────────────────────────────────────────
+function layerOf(t){
+  if(t==='EditorPhysicsObject'||t==='EditorPhysicsEntity') return 'terrain';
+  if(t==='EditorSprite'||t==='ComposedSprite') return 'sprites';
+  if(t==='EditorTrigger'||t==='WaterTrigger') return 'triggers';
+  if(t&&t.indexOf('Joint')>=0) return 'joints';
+  return 'markers'; // Moto, EditorCamera, TriggerWin, ExplosiveBarrel, ...
+}
+function posOf(p){ // representative world point of an entity
+  const P=p.Properties||{};
+  if(Array.isArray(P.position)&&P.position.length===2) return {x:P.position[0],y:P.position[1]};
+  if(P.Vertexes||p.Vertexes){
+    const vs=p.Vertexes||[]; if(vs.length){let sx=0,sy=0;vs.forEach(v=>{sx+=v.x;sy+=v.y});return{x:sx/vs.length,y:sy/vs.length};}
+  }
+  if(Array.isArray(p.Anchors)&&p.Anchors.length) return {x:p.Anchors[0].x,y:p.Anchors[0].y};
+  return null;
+}
+
+// ── transforms ──────────────────────────────────────────────────────────────
+function s2w(sx,sy){return{x:view.x+(sx-cv.width/2)/view.scale, y:view.y-(sy-cv.height/2)/view.scale};}
+function wx(x){return cv.width/2+(x-view.x)*view.scale;}
+function wy(y){return cv.height/2-(y-view.y)*view.scale;}
+
+function bounds(){
+  let mnx=1e9,mny=1e9,mxx=-1e9,mxy=-1e9,any=false;
+  const acc=(x,y)=>{any=true;if(x<mnx)mnx=x;if(y<mny)mny=y;if(x>mxx)mxx=x;if(y>mxy)mxy=y;};
+  ENTS.forEach(e=>{
+    (e.Vertexes||[]).forEach(v=>acc(v.x,v.y));
+    const pt=posOf(e); if(pt)acc(pt.x,pt.y);
+    (e.Anchors||[]).forEach(a=>acc(a.x,a.y));
+  });
+  if(!any) return {mnx:-100,mny:-100,mxx:100,mxy:100};
+  return {mnx,mny,mxx,mxy};
+}
+function fitToView(){
+  const b=bounds(), W=cv.width,H=cv.height;
+  const spanx=Math.max(b.mxx-b.mnx,1), spany=Math.max(b.mxy-b.mny,1);
+  view.scale=Math.min(W/spanx,H/spany)*0.92;
+  view.x=(b.mnx+b.mxx)/2; view.y=(b.mny+b.mxy)/2;
+}
+
+// ── Catmull-Rom → polyline (world pts) ───────────────────────────────────────
+function catmull(pts, closed){
+  if(pts.length<3) return pts.slice();
+  const out=[]; const n=pts.length;
+  const get=i=> closed ? pts[(i%n+n)%n] : pts[Math.max(0,Math.min(n-1,i))];
+  const last= closed ? n : n-1;
+  for(let i=0;i<last;i++){
+    const p0=get(i-1),p1=get(i),p2=get(i+1),p3=get(i+2);
+    const seg=Math.max(1,Math.round((pts[i].segments)||4));
+    for(let j=0;j<seg;j++){
+      const t=j/seg, t2=t*t, t3=t2*t;
+      out.push({
+        x:0.5*((2*p1.x)+(-p0.x+p2.x)*t+(2*p0.x-5*p1.x+4*p2.x-p3.x)*t2+(-p0.x+3*p1.x-3*p2.x+p3.x)*t3),
+        y:0.5*((2*p1.y)+(-p0.y+p2.y)*t+(2*p0.y-5*p1.y+4*p2.y-p3.y)*t2+(-p0.y+3*p1.y-3*p2.y+p3.y)*t3),
+      });
+    }
+  }
+  if(!closed) out.push(pts[n-1]);
+  return out;
+}
+
+// ── draw ────────────────────────────────────────────────────────────────────
+function draw(){
+  const W=cv.width,H=cv.height;
+  ctx.fillStyle='#181825'; ctx.fillRect(0,0,W,H);
+  drawGrid();
+  // terrain (physics polygons / splines)
+  if(LAYERS.terrain.on) ENTS.forEach(e=>{ if(layerOf(e.Type)==='terrain') drawPhysics(e); });
+  // joints
+  if(LAYERS.joints.on) ENTS.forEach(e=>{ if(layerOf(e.Type)==='joints') drawJoint(e); });
+  // triggers
+  if(LAYERS.triggers.on) ENTS.forEach(e=>{ if(layerOf(e.Type)==='triggers') drawTrigger(e); });
+  // sprites
+  if(LAYERS.sprites.on) ENTS.forEach(e=>{ if(layerOf(e.Type)==='sprites') drawSprite(e); });
+  // markers (start/win/camera/barrel)
+  if(LAYERS.markers.on) ENTS.forEach(e=>{ if(layerOf(e.Type)==='markers') drawMarker(e); });
+  if(selected) drawSelected(selected);
+}
+function drawGrid(){
+  const b=s2w(0,0), e=s2w(cv.width,cv.height);
+  let step=Math.pow(10,Math.floor(Math.log10((e.x-b.x)/10))); if(!isFinite(step)||step<=0)step=100;
+  ctx.lineWidth=1; ctx.strokeStyle='rgba(69,71,90,.35)'; ctx.fillStyle='#45475a'; ctx.font='10px monospace';
+  for(let x=Math.ceil(b.x/step)*step; x<e.x; x+=step){ const sx=wx(x); ctx.beginPath();ctx.moveTo(sx,0);ctx.lineTo(sx,cv.height);ctx.stroke(); }
+  for(let y=Math.floor(b.y/step)*step; y<e.y; y+=step){ const sy=wy(y); ctx.beginPath();ctx.moveTo(0,sy);ctx.lineTo(cv.width,sy);ctx.stroke(); }
+  // world axes
+  ctx.strokeStyle='rgba(137,180,250,.25)';
+  ctx.beginPath();ctx.moveTo(wx(0),0);ctx.lineTo(wx(0),cv.height);ctx.moveTo(0,wy(0));ctx.lineTo(cv.width,wy(0));ctx.stroke();
+}
+function outline(e){ // world polyline for a physics object's boundary
+  const vs=e.Vertexes||[]; if(vs.length<2) return null;
+  const spline=e.Properties&&e.Properties.spline;
+  return spline ? catmull(vs,true) : vs.map(v=>({x:v.x,y:v.y}));
+}
+function drawPhysics(e){
+  if(e.Type==='EditorPhysicsEntity'){ return drawMarker(e,'#a6e3a1','▣'); }
+  const poly=outline(e); if(!poly) return;
+  ctx.beginPath(); poly.forEach((p,i)=> i?ctx.lineTo(wx(p.x),wy(p.y)):ctx.moveTo(wx(p.x),wy(p.y))); ctx.closePath();
+  ctx.fillStyle='rgba(166,227,161,.10)'; ctx.fill();
+  ctx.lineWidth=1.5; ctx.strokeStyle='#a6e3a1'; ctx.stroke();
+}
+function drawSprite(e){
+  const pt=posOf(e); if(!pt) return; const sx=wx(pt.x),sy=wy(pt.y);
+  ctx.fillStyle='rgba(137,180,250,.9)'; ctx.beginPath(); ctx.arc(sx,sy,2.5,0,7); ctx.fill();
+  if(showLabels){ const f=(e.Properties&&(e.Properties.frame||e.Properties.name))||''; if(f){ctx.fillStyle='#6c7086';ctx.font='9px monospace';ctx.fillText(f,sx+4,sy-3);} }
+}
+function drawTrigger(e){
+  const pt=posOf(e); if(!pt) return; const sx=wx(pt.x),sy=wy(pt.y);
+  const r=(e.Properties&&e.Properties.radius)||0;
+  ctx.strokeStyle='rgba(249,226,175,.8)'; ctx.lineWidth=1.5; ctx.setLineDash([4,3]);
+  ctx.beginPath(); ctx.arc(sx,sy,Math.max(4,r*view.scale),0,7); ctx.stroke(); ctx.setLineDash([]);
+  ctx.fillStyle='#f9e2af'; ctx.beginPath(); ctx.arc(sx,sy,2,0,7); ctx.fill();
+}
+function drawJoint(e){
+  const a=e.Anchors||[]; if(!a.length) return;
+  ctx.strokeStyle='#cba6f7'; ctx.lineWidth=1.5;
+  if(a.length>=2){ ctx.beginPath(); ctx.moveTo(wx(a[0].x),wy(a[0].y)); ctx.lineTo(wx(a[1].x),wy(a[1].y)); ctx.stroke(); }
+  a.forEach(an=>{ const sx=wx(an.x),sy=wy(an.y); ctx.strokeStyle='#cba6f7'; ctx.beginPath(); ctx.moveTo(sx-3,sy-3);ctx.lineTo(sx+3,sy+3);ctx.moveTo(sx+3,sy-3);ctx.lineTo(sx-3,sy+3); ctx.stroke(); });
+}
+function drawMarker(e,col,glyph){
+  const pt=posOf(e); if(!pt) return; const sx=wx(pt.x),sy=wy(pt.y);
+  let c=col||'#f5c2e7', g=glyph||'◆', label='';
+  if(e.Type==='Moto'){ c='#a6e3a1'; g='🏍'; label='START'; }
+  else if(e.Type==='TriggerWin'){ c='#f38ba8'; g='🏁'; label='WIN'; }
+  else if(e.Type==='EditorCamera'){ c='#94e2d5'; g='🎥'; label='CAM'; }
+  else if(e.Type==='ExplosiveBarrel'){ c='#fab387'; g='💥'; }
+  ctx.font='15px monospace'; ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText(g,sx,sy); ctx.textAlign='left'; ctx.textBaseline='alphabetic';
+  if(label){ ctx.fillStyle=c; ctx.font='bold 10px monospace'; ctx.fillText(label,sx+10,sy-6); }
+}
+function drawSelected(e){
+  const pt=posOf(e); if(!pt) return; const sx=wx(pt.x),sy=wy(pt.y);
+  ctx.strokeStyle='#f5c2e7'; ctx.lineWidth=2;
+  const poly=outline(e);
+  if(poly && layerOf(e.Type)==='terrain'){ ctx.beginPath(); poly.forEach((p,i)=> i?ctx.lineTo(wx(p.x),wy(p.y)):ctx.moveTo(wx(p.x),wy(p.y))); ctx.closePath(); ctx.stroke();
+    (e.Vertexes||[]).forEach(v=>{ctx.fillStyle='#f5c2e7';ctx.beginPath();ctx.arc(wx(v.x),wy(v.y),3,0,7);ctx.fill();}); }
+  else { ctx.beginPath(); ctx.arc(sx,sy,10,0,7); ctx.stroke(); }
+}
+
+// ── interaction ──────────────────────────────────────────────────────────────
+let dragging=false, last=null, moved=0;
+cv.addEventListener('mousedown',e=>{dragging=true;moved=0;last={x:e.clientX,y:e.clientY};cv.classList.add('drag');});
+window.addEventListener('mouseup',e=>{ if(dragging&&moved<4) pick(e); dragging=false; cv.classList.remove('drag'); });
+window.addEventListener('mousemove',e=>{
+  const r=cv.getBoundingClientRect(); const w=s2w(e.clientX-r.left,e.clientY-r.top);
+  $('#hud').textContent=`world (${w.x.toFixed(0)}, ${w.y.toFixed(0)})   ·   ${view.scale.toFixed(2)} px/u   ·   ${ENTS.length} entities`;
+  if(!dragging) return;
+  const dx=e.clientX-last.x, dy=e.clientY-last.y; moved+=Math.abs(dx)+Math.abs(dy);
+  view.x-=dx/view.scale; view.y+=dy/view.scale; last={x:e.clientX,y:e.clientY}; draw();
+});
+cv.addEventListener('wheel',e=>{
+  e.preventDefault(); const r=cv.getBoundingClientRect(); const mx=e.clientX-r.left,my=e.clientY-r.top;
+  const before=s2w(mx,my); view.scale*= e.deltaY<0?1.1:1/1.1; const after=s2w(mx,my);
+  view.x+=before.x-after.x; view.y+=before.y-after.y; draw();
+},{passive:false});
+
+function pick(e){
+  const r=cv.getBoundingClientRect(); const m={x:e.clientX-r.left,y:e.clientY-r.top};
+  let best=null,bd=14*14;
+  ENTS.forEach(ent=>{ if(!LAYERS[layerOf(ent.Type)].on) return; const pt=posOf(ent); if(!pt)return;
+    const dx=wx(pt.x)-m.x, dy=wy(pt.y)-m.y, d=dx*dx+dy*dy; if(d<bd){bd=d;best=ent;} });
+  // terrain: also test point-in-polygon so big shapes are clickable anywhere
+  if(!best){ for(const ent of ENTS){ if(layerOf(ent.Type)!=='terrain'||!LAYERS.terrain.on) continue; const poly=outline(ent); if(poly&&pointIn(poly,m)){best=ent;break;} } }
+  selected=best; renderInspector(); draw();
+}
+function pointIn(poly,m){ let inside=false; for(let i=0,j=poly.length-1;i<poly.length;j=i++){ const xi=wx(poly[i].x),yi=wy(poly[i].y),xj=wx(poly[j].x),yj=wy(poly[j].y); if(((yi>m.y)!==(yj>m.y))&&(m.x<(xj-xi)*(m.y-yi)/(yj-yi)+xi)) inside=!inside; } return inside; }
+
+function renderInspector(){
+  const b=$('#inspBody');
+  if(!selected){ b.innerHTML='<p class="empty">Click an entity to inspect its properties.</p>'; return; }
+  const e=selected, P=e.Properties||{};
+  let h=`<div class="ty">${e.Type}</div>`;
+  if(e.Vertexes) h+=`<div class="empty">${e.Vertexes.length} vertexes${P.spline?' · spline':''}</div>`;
+  h+='<table>';
+  Object.keys(P).sort().forEach(k=>{ let v=P[k]; if(Array.isArray(v))v='['+v.map(x=>typeof x==='number'?(+x).toFixed(2):x).join(', ')+']'; else if(typeof v==='number')v=(+v).toFixed(3).replace(/\.?0+$/,''); h+=`<tr><td class="k">${k}</td><td class="v">${v}</td></tr>`; });
+  h+='</table>';
+  b.innerHTML=h;
+}
+
+// ── chrome ───────────────────────────────────────────────────────────────────
+function buildLayers(){
+  const counts={}; ENTS.forEach(e=>{const L=layerOf(e.Type);counts[L]=(counts[L]||0)+1;});
+  const box=$('#layers'); box.innerHTML='';
+  Object.entries(LAYERS).forEach(([k,L])=>{
+    const row=document.createElement('label'); row.className='layer';
+    row.innerHTML=`<input type="checkbox" ${L.on?'checked':''}><span class="sw" style="background:${L.color}"></span>${L.label}<span class="ct">${counts[k]||0}</span>`;
+    row.querySelector('input').onchange=ev=>{L.on=ev.target.checked;draw();};
+    box.appendChild(row);
+  });
+  $('#legend').innerHTML='🏍 start · 🏁 win · 🎥 camera · 💥 barrel<br>dashed = trigger radius · ✕ = joint anchor';
+}
+function toggleLabels(){showLabels=!showLabels;draw();}
+
+async function loadLevel(lid){
+  const r=await fetch('/api/level/'+encodeURIComponent(lid)); LEVEL=await r.json();
+  ENTS=LEVEL.Entities||[]; selected=null; renderInspector();
+  const t=LEVEL.times||[]; $('#medals').innerHTML=`lid <b>${LEVEL.lid}</b> · type ${LEVEL.type} · medals 🥇<b>${t[0]}</b> 🥈<b>${t[1]}</b> 🥉<b>${t[2]}</b> · ${ENTS.length} entities`;
+  buildLayers(); resize(); fitToView(); draw();
+}
+async function init(){
+  const r=await fetch('/api/levels'); const d=await r.json();
+  const sel=$('#lvlSel'); sel.innerHTML='';
+  (d.levels||[]).forEach(l=>{const o=document.createElement('option');o.value=o.textContent=l;sel.appendChild(o);});
+  sel.onchange=()=>loadLevel(sel.value);
+  if(d.levels&&d.levels.length) loadLevel(d.levels[0]);
+  else $('#inspBody').innerHTML='<p class="empty">No cached levels. Import one (see README).</p>';
+}
+function resize(){const r=cv.parentElement.getBoundingClientRect();cv.width=r.width;cv.height=r.height;}
+window.addEventListener('resize',()=>{resize();draw();});
+init();
+</script>
+</body>
+</html>

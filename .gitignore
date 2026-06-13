@@ -39,8 +39,15 @@ tools/unidbg/target/
 tools/unidbg/natives/
 *.class
 __pycache__/
+# decrypted level data (circumvention material — local only, never committed)
+tools/level-editor/levels/
+*.level.json
 
 # ── local junk ───────────────────────────────────────────────────────────
 Screenshot_*.jpg
 .DS_Store
 /tmp/
+# playwright MCP scratch
+.playwright-mcp/
+# level-render screenshots (derived from decrypted level data)
+lvl_*.png
