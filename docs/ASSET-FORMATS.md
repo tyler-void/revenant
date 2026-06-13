@@ -3,6 +3,31 @@
 What every interesting file is, what's plaintext vs encrypted, and where the keys/logic live.
 Compiled from the modding work + the Phase-2 level-decrypt spike (see [ROADMAP](ROADMAP.md)).
 
+## ✅ SOLVED — full decode pipeline (2026-06-13)
+
+```
+<file>.dat → strip "<ascii-len>\0" header → DECRYPT → [levels only: GUNZIP] → binary plist (bplist00)
+```
+
+- **Decrypt** = the game's own cipher, driven in unidbg ([tools/unidbg/.../LevelDecrypt.java](../tools/unidbg/src/main/java/com/resurrect/LevelDecrypt.java),
+  `BR_KEY` env). IMPs: `+[NSData DataWithContentsOfFile:Password:]` `0x64ea98` (cipher core
+  `cipher_init 0x650090` / `setkey 0x650570` / `process 0x65085c`); key is a raw `char*`.
+- **Keys are captured on-device** (Frida is dead here) with [build/patch_keylog.py](../build/patch_keylog.py):
+  an ARM stub hooks `cipher_setkey`/`cipher_process` and logs the key (hex) + decrypt length to logcat
+  (tags `RVKEY`/`RVLEN`). You play; the real key lands.
+  - **Config files** (`ProductList`/`Shop`/`GameConfig`/`ConditionInfo`) — ONE shared **config key** (50 B),
+    plaintext is **XML plist** (no gzip). → bike roster + IAP, achievements, game config.
+  - **Level files** (`<w>_<l>.dat`) — a **per-level key** (e.g. 1_1 = 24 B), and the decrypted body is
+    **gzip** → gunzip → **binary plist**.
+- **Level plist schema** (1_1: 384 entities):
+  `{ lid, type, times:[medal times], Entities:[ { Selected, Type:"EditorPhysicsObject",
+  Vertexes:[{x,y,segments}]  ← Catmull-Rom spline control points, Properties:{z,rotation,density,allowSleep,…} } ] }`
+- **Re-encrypt** (for the editor / World 5): gzip the edited plist, then the engine's writer
+  `+[NSData ArchiveRootObject:ToFile:Password:]` (`0x6a…` selector) with the per-level key.
+
+> Keys + decrypted game data are circumvention material → **local only, never committed**
+> (see [PRESERVATION-PLAYBOOK](PRESERVATION-PLAYBOOK.md) / [LEGAL.md](LEGAL.md)).
+
 ## The encrypted container (`*.dat`)
 
 All encrypted data files share one container:

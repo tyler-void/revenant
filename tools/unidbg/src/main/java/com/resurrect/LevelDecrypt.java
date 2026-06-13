@@ -153,20 +153,19 @@ public class LevelDecrypt {
         // captured key is the CONFIG key -> test it on a config file (ProductList.dat) to validate
         java.io.File dir=new java.io.File("../../build/work/assets/unpack");
         if(!dir.isDirectory()) dir=new java.io.File("build/work/assets/unpack");
-        for(String fn : new String[]{"ProductList.dat","Shop.dat","ConditionInfo.dat","GameConfig_T1.dat"}){
-            byte[] fb=java.nio.file.Files.readAllBytes(new java.io.File(dir,fn).toPath());
+        byte[] fb=java.nio.file.Files.readAllBytes(new java.io.File(dir,"1_1.dat").toPath());
+        {   // dump 0x64ea98(1_1, level key) raw output for nibble-swap analysis
             long nsdata = makeNSData(clsNSData, fb);
             long r = module.callFunction(emulator, DWF_PW, 0, 0, (int)nsdata, (int)keyPtr).longValue()&0xffffffffL;
-            int pct=(r!=0&&r!=0xffffffffL)?pctPrintable(r):-1;
-            log("=== "+fn+" -> "+pct+"% ===");
-            if(pct>=80){
+            log("=== 1_1.dat via 0x64ea98 -> "+pctPrintable(r)+"% (dumping raw) ===");
+            if(r!=0 && r!=0xffffffffL){
                 long selB=module.callFunction(emulator,SEL_REG,(int)cstrAlloc("bytes")).longValue()&0xffffffffL;
                 long selL=module.callFunction(emulator,SEL_REG,(int)cstrAlloc("length")).longValue()&0xffffffffL;
                 long ptr=module.callFunction(emulator,MSGSEND,(int)r,(int)selB).longValue()&0xffffffffL;
                 long len=module.callFunction(emulator,MSGSEND,(int)r,(int)selL).longValue()&0xffffffffL;
                 byte[] full=emulator.getBackend().mem_read(ptr,(int)Math.min(len,2000000));
-                java.nio.file.Files.write(java.nio.file.Paths.get("/tmp/dec_"+fn.replace(".dat",".xml")), full);
-                log("   wrote /tmp/dec_"+fn.replace(".dat",".xml")+" ("+full.length+" B)");
+                java.nio.file.Files.write(java.nio.file.Paths.get("/tmp/raw_1_1.bin"), full);
+                log("   wrote /tmp/raw_1_1.bin ("+full.length+" B)");
             }
         }
 

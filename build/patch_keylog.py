@@ -88,8 +88,37 @@ orig = bytes(data[HOOK:HOOK+4])
 want = br(HOOK, CONT)
 assert orig == want, "hook site mismatch: have %s want %s (b 0x6505f0)" % (orig.hex(), want.hex())
 
-# apply
+# apply stub1 (key)
 data[S:S+len(stub)] = stub
 data[HOOK:HOOK+4] = br(HOOK, S)
+
+# ---- stub2: log cipher_process LENGTH (r2) to identify what each decrypt touches ----
+S2 = S + 0x100
+PROC, PROC_CONT, PROC_PUSH = 0x65085c, 0x650860, 0xe92d48f0  # push {r4,r5,r6,r7,fp,lr}
+T2_OFF, F2_OFF = 0x24, 0x2c
+ins2 = [
+    0xe92d5fff,                                  # +00 push {r0-r12, lr}
+    0xe1a03002,                                  # +04 mov  r3, r2   (%d = len)
+    0xe3a00003,                                  # +08 mov  r0, #3
+    0xe28f1000 | ((T2_OFF-(0x0c+8))&0xfff),      # +0c add  r1, pc, -> tag2
+    0xe28f2000 | ((F2_OFF-(0x10+8))&0xfff),      # +10 add  r2, pc, -> fmt2
+    ('bl', 0x14, PLT_LOG),                       # +14 bl   __android_log_print
+    0xe8bd5fff,                                  # +18 pop  {r0-r12, lr}
+    PROC_PUSH,                                   # +1c push {r4,r5,r6,r7,fp,lr}  (original insn)
+    ('b',  0x20, PROC_CONT),                     # +20 b    0x650860
+]
+stub2 = bytearray()
+for w in ins2:
+    if isinstance(w, int): stub2 += struct.pack('<I', w)
+    else:
+        kind, rel, tgt = w; at = S2 + rel
+        stub2 += (br(at, tgt, link=True) if kind == 'bl' else cb(at, tgt, cond=0xe))
+assert len(stub2) == T2_OFF, hex(len(stub2))
+stub2 += b'RVLEN\x00\x00\x00'; stub2 += b'%d\x00\x00'
+assert all(b == 0 for b in data[S2:S2+len(stub2)]), "cave2 @%#x not zero" % S2
+assert bytes(data[PROC:PROC+4]) == struct.pack('<I', PROC_PUSH), "proc hook mismatch: %s" % bytes(data[PROC:PROC+4]).hex()
+data[S2:S2+len(stub2)] = stub2
+data[PROC:PROC+4] = cb(PROC, S2, cond=0xe)
+
 open(SO, 'wb').write(data)
-print("[keylog] stub @ %#x (%d B), hook %#x: b 0x6505f0 -> b stub; logs tag RVKEY" % (S, len(stub), HOOK))
+print("[keylog] stub @ %#x -> RVKEY (key);  stub2 @ %#x -> RVLEN (cipher_process len)" % (S, S2))
