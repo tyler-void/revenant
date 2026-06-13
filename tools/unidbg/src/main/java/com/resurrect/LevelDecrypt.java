@@ -135,18 +135,39 @@ public class LevelDecrypt {
         long ts=makeNSString("hello"); log("test NSString(\"hello\").length="+module.callFunction(emulator,MSGSEND,(int)ts,(int)module.callFunction(emulator,SEL_REG,(int)cstrAlloc("length")).longValue()).longValue());
         byte[] fileBytes = java.nio.file.Files.readAllBytes(lvl.toPath());
 
-        // working decryption oracle: try candidate passwords, report printable%
-        String[] cands = {"", "1_1.dat", "1_1", "1/1_1.dat", "bikerivals", "BikeRivals",
-                          "miniclip", "com.miniclip.bikerivals", "Encryption", "[redacted-key]",
-                          "MiniclipBikeRivals", "Profusion", "level", "key", "password",
-                          "bikerivalsbikerivals", "data", "Bike Rivals"};
-        for(String pw : cands){
-            long nsdata = makeNSData(clsNSData, fileBytes);
-            long pwObj = pw.isEmpty()? 0 : makeNSString(pw);
-            long r = module.callFunction(emulator, DWF_PW, 0, 0, (int)nsdata, (int)pwObj).longValue()&0xffffffffL;
-            int pct = (r!=0 && r!=0xffffffffL) ? pctPrintable(r) : -1;
-            log("PW "+String.format("%-26s", pw.isEmpty()?"(nil)":"\""+pw+"\"")+" -> result=0x"+Long.toHexString(r)+"  printable="+pct+"%");
-            if(pct>=85){ log("  *** LIKELY CORRECT ***"); dumpNSData(r); }
+        // === decrypt with the ON-DEVICE-CAPTURED key, passed as a RAW char* (not an NSString!) ===
+        // (config key = 50 bytes, captured on-device; level key differs — separate cipher)
+        // Key is captured per-device with build/patch_keylog.py (logged to logcat tag RVKEY) and
+        // supplied via the BR_KEY env var as hex — NOT committed (a cipher key is circumvention
+        // material; see docs/PRESERVATION-PLAYBOOK.md / LEGAL.md). The config key decrypts
+        // ProductList/Shop/GameConfig/ConditionInfo; levels use a separate (Pass2) cipher.
+        String keyHex = System.getenv("BR_KEY");
+        if (keyHex == null || keyHex.isEmpty()) { log("set BR_KEY=<hex> (capture via build/patch_keylog.py + RVKEY logcat)"); emulator.close(); return; }
+        byte[] key = new byte[keyHex.length()/2];
+        for(int i=0;i<key.length;i++) key[i]=(byte)Integer.parseInt(keyHex.substring(2*i,2*i+2),16);
+        MemoryBlock kb = memory.malloc(key.length+1, true);
+        long keyPtr = kb.getPointer().peer & 0xffffffffL;
+        byte[] kz=new byte[key.length+1]; System.arraycopy(key,0,kz,0,key.length);
+        backend.mem_write(keyPtr, kz);
+        log("captured key: "+key.length+" bytes @0x"+Long.toHexString(keyPtr));
+        // captured key is the CONFIG key -> test it on a config file (ProductList.dat) to validate
+        java.io.File dir=new java.io.File("../../build/work/assets/unpack");
+        if(!dir.isDirectory()) dir=new java.io.File("build/work/assets/unpack");
+        for(String fn : new String[]{"ProductList.dat","Shop.dat","ConditionInfo.dat","GameConfig_T1.dat"}){
+            byte[] fb=java.nio.file.Files.readAllBytes(new java.io.File(dir,fn).toPath());
+            long nsdata = makeNSData(clsNSData, fb);
+            long r = module.callFunction(emulator, DWF_PW, 0, 0, (int)nsdata, (int)keyPtr).longValue()&0xffffffffL;
+            int pct=(r!=0&&r!=0xffffffffL)?pctPrintable(r):-1;
+            log("=== "+fn+" -> "+pct+"% ===");
+            if(pct>=80){
+                long selB=module.callFunction(emulator,SEL_REG,(int)cstrAlloc("bytes")).longValue()&0xffffffffL;
+                long selL=module.callFunction(emulator,SEL_REG,(int)cstrAlloc("length")).longValue()&0xffffffffL;
+                long ptr=module.callFunction(emulator,MSGSEND,(int)r,(int)selB).longValue()&0xffffffffL;
+                long len=module.callFunction(emulator,MSGSEND,(int)r,(int)selL).longValue()&0xffffffffL;
+                byte[] full=emulator.getBackend().mem_read(ptr,(int)Math.min(len,2000000));
+                java.nio.file.Files.write(java.nio.file.Paths.get("/tmp/dec_"+fn.replace(".dat",".xml")), full);
+                log("   wrote /tmp/dec_"+fn.replace(".dat",".xml")+" ("+full.length+" B)");
+            }
         }
 
         // CAPTURE the real password: run the game's own no-pw DataWithContentsOfFile: with a REAL
