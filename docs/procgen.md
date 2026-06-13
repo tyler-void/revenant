@@ -239,6 +239,38 @@ Recommendation: pursue (2) the mod-loader OR (3) a chosen slot for shipping gene
 levels now; treat (1) as a later deep-RE project. World 5 as a *visible new world* is
 real work, not a quick patch.
 
+### Static RE EXHAUSTED (2026-06-13) — it's a dynamic-only crack
+Tried every static angle; all hit the objc/CCB wall:
+- NOT data-driven: `MainMenu.plist` ComingSoon ref is just a sprite frame
+  (`coming_soon_sticker.png`); `WorldDefinition.plist` has 12 panels but no
+  availability flag; cloning `GameConfig_T5` did nothing.
+- NO hardcoded per-world level-count table (searched 30/40/45/15 as int32/byte/float
+  /cumulative — absent). Counts are computed at runtime (likely by probing which
+  `<w>_<l>.dat` exist).
+- NO static callers of `createLevelInfo:`/`getTotalLevels:`/`getFirstLockedWorld`/
+  `getWorldPanelForIndex:` — all `objc_msgSend`-dispatched.
+- `_comingSoon` accessed via non-fragile ivar (offset 0x1c, loaded through a global,
+  not an immediate); "WorldDefinition" isn't even a C-string; `_worldPanels` is an
+  ivar with no string xref. Same wall as the uncracked bike-select gate.
+
+### Dynamic plan (the real path — proven on-device ARM-stub method)
+Reuse the `build/patch_keylog.py` code-cave technique (cave @0xaf745c; hook = replace
+an insn with a branch to the cave, do work + displaced insn + branch back; the project
+captured the cipher keys this way — Frida crashes the 32-bit game).
+Hypothesis: `WorldDefinition.plist` lists 12 panels, so the level-select probably
+CREATES all 12 and flags 5–12 `comingSoon=YES`. If so:
+1. **comingSoon-clear hook** at `getWorldPanelForIndex:` epilogue (~0x56bc14, panel in
+   r4/r0): `cmp r4,#0; strbne #0,[r4,#0x1c]` → clear `_comingSoon` on returned panels.
+   Test on device: does World 5 stop showing "COMING SOON" / become selectable?
+2. If yes, remaining gates to clear (each its own hook/experiment): per-world LEVEL
+   COUNT (so W5 shows N level buttons — trace where it's computed), tapping a W5 level
+   actually loads `5_M.dat` (navigation), and a theme/parallax for W5 (clone T1/t1).
+3. Re-add generated `5_1..5_N.dat` so W5 has content before testing (else a cleared
+   comingSoon on an empty world likely crashes on tap).
+This is iterative device work (build hook → install → user navigates → logcat/observe →
+refine), multi-session. Crash risk on partial hacks — build each hook carefully + assert
+the hook-site bytes (like patch_keylog does) before patching.
+
 ## 5. Open questions / bugs
 - **Barrels not visible on device** (generated W1L4 reported 2 barrels, none seen).
   Check: dynamic-body collision filter vs generated slabs, spawn embedding/ejection,
