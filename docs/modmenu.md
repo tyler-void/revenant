@@ -97,4 +97,13 @@ Re-skinning/re-speccing the 21 EXISTING bike slots works + persists (mod-loader)
 - **NEXT (needs user):** load any level → `adb logcat | grep RVRD` → the exact `.dat` path.
   Then design the mod-loader: (a) redirect the reader's path arg to a `mods/` override if
   one exists, or (b) if CCFileUtils is consulted, prepend `mods/` to `_searchPath`.
-- Trace tooling: `build/patch_pathtrace.py` (re-targetable resolver/reader trace).
+- Trace tooling: `build/patch_pathtrace.py` / `build/patch_lvltrace.py`.
+- **CONFIRMED (device, 2026-06-14): levels requested as the BARE filename `1_16.dat`**
+  (`<world>_<level>.dat`) via `loadLevelInfo:FileName:`@0x6e25dc (FileName = r3 NSString).
+  No `unpack/` prefix, no subdir — the resource layer prepends `assets/unpack/`. So a
+  mods/ override file is named exactly `<w>_<l>.dat`. THIS is the mod-loader's match key.
+- Implementation reality: the REDIRECT (build mods path + fileExistsAtPath + swap the
+  read/data) is complex hand-assembly. Better long-term = an injected native lib
+  compiled with the Android NDK (also needed for the ImGui menu). NDK is installable
+  (chaotic-aur android-ndk r29); cross-compiler not yet present.
+
