@@ -110,3 +110,43 @@
 - Tyler is an expert player — **their eye on the real level is the best
   ground truth** when emulator/static analysis is ambiguous (e.g. the content scale).
 - Surface honest tradeoffs and ask before sinking effort into deep RE rabbit holes.
+
+## Browser APK patching — DEX + AXML surgery (Phase 8)
+
+- **A half-applied tilt fix is the *crashing* config.** Force-registering the sensor
+  (register/unregister byte-patches) WITHOUT the `onSensorChanged` try/catch makes the
+  game forward to the NATIVE `onSensorChanged(FFFJ)` before `libgame.so` binds it →
+  `UnsatisfiedLinkError`. So the tilt fix must be ATOMIC: all three method edits or none.
+  `dex_tilt_rewrite` resolves+verifies everything first and returns 0 (no-op) on any
+  mismatch, so a wrong/non-1.5.2 dex is left untouched rather than half-patched.
+- **Growing a method = append a new `code_item`, don't rewrite in place.** Appending at
+  the END of the code section + repointing the method's `code_off` keeps contiguity and
+  means you only shift u32 offsets ≥ the insertion point (+K) and bump the map's
+  CODE count by 1. The old code_item is left as harmless dead data. Far less error-prone
+  than a full re-serialize. The ONE uleb offset (`code_off`) stays same-width here (both
+  ends near EOF) so it's an in-place overwrite — assert that.
+- **`map_list` is NOT always last.** This dx-built dex puts MAP_LIST at the *start* of the
+  data section (it = `data_off`), well before the strings/code. Compute "does it move?"
+  from `off >= P`, never assume it's at EOF. (Cost me a corrupted map the first run.)
+- **Use a catch-ALL handler to avoid touching the type pool.** `.catchall` needs no
+  `type_idx`, so no new string/type ids → no sorted-table reindex. (Typed `.catch ULE`
+  would've forced adding `UnsatisfiedLinkError` to the pool — a much bigger edit.)
+- **DEX opcode gotcha: `iget-wide` is 0x53; 0x5a is `iput-wide` (store!).** Hand-assembled
+  bytecode passed structural checks but baksmali revealed it was *storing* garbage into
+  the event's timestamp. **Always round-trip hand-built dex through baksmali (dexlib2, a
+  strict parser) — it catches semantic bugs a structural validator won't.**
+- **Verify the whole chain with real tools:** Python oracle → Rust→WASM **byte-identical**
+  diff → baksmali disasm of all touched methods → `aapt2 dump badging` on the final APK →
+  `jarsigner -verify` → install + boot on device. Each layer caught a different class of bug.
+- **Binary AXML editing is easy (vs DEX):** chunks reference the string pool by INDEX and
+  each other by ORDER — no byte-offset cross-refs. Removing a `<uses-permission>` or a whole
+  nested `<service>/<receiver>` (START→matching-END by depth) is just splice-out + decrement
+  the root chunk size (offset 4). String pool left untouched (orphan strings are fine).
+- **MIUI's first-launch "review" lists generic AppOps, not just manifest perms.** Dropping
+  `ACCESS_COARSE_LOCATION`/`GET_ACCOUNTS` removed the location/accounts rows; but "Send MMS",
+  clipboard, installed-apps, background-windows persist — they're MIUI behavior toggles shown
+  for any legacy (targetSdk-22) app, NOT manifest-backed, and default OFF. Don't chase them
+  with manifest surgery (a targetSdk bump would, but that breaks a 2014 game). Removing the
+  GCM components is still worth it (kills the actual push/"MMS" capability + the tracker).
+- **Tilt needs no `HIGH_SAMPLING_RATE_SENSORS`:** `register()` uses `SENSOR_DELAY_GAME`
+  (~50 Hz, under the 200 Hz gate). End users only grant "Motion"/sensor access; nothing else.

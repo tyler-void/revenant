@@ -1,26 +1,17 @@
-:root {
-  --bg: #15171c; --panel: #1e2127; --acc: #ff7a18; --txt: #e6e6e6;
-  --dim: #9aa0aa; --ok: #4ec96b; --err: #ff5c5c; --border: #2a2e36;
+@import "tailwindcss";
+
+/* Revenant brand palette (Unity-dark + Bike-Rivals orange) as Tailwind theme tokens,
+   so utilities like bg-panel / text-brand / border-edge work throughout the app. */
+@theme {
+  --color-bg: #15171c;
+  --color-panel: #1e2127;
+  --color-brand: #ff7a18;
+  --color-ink: #e6e6e6;
+  --color-dim: #9aa0aa;
+  --color-ok: #4ec96b;
+  --color-err: #ff5c5c;
+  --color-edge: #2a2e36;
 }
-* { box-sizing: border-box; }
-body { margin: 0; font: 15px/1.55 system-ui, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--txt); }
-.wrap { max-width: 800px; margin: 0 auto; padding: 28px 18px 60px; }
-.hero { display: flex; gap: 16px; align-items: center; margin-bottom: 20px; }
-.logo { width: 88px; height: 88px; border-radius: 16px; box-shadow: 0 6px 24px rgba(255,122,24,.25); }
-h1 { font-size: 24px; margin: 0; }
-h2 { font-size: 16px; margin: 0 0 10px; }
-.sub { color: var(--dim); margin: 4px 0 0; }
-.dim { color: var(--dim); } .ok { color: var(--ok); } .err { color: var(--err); }
-.sm { font-size: 13px; }
-.panel { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 18px; margin: 14px 0; }
-.legal { font-size: 13px; color: var(--dim); border-left: 3px solid var(--acc); }
-.opt { display: block; padding: 6px 0; cursor: pointer; }
-.opt input { margin-right: 8px; }
-.opt.disabled { color: var(--dim); cursor: default; }
-.tag { font-size: 11px; background: var(--border); color: var(--dim); border-radius: 5px; padding: 1px 6px; margin-left: 6px; }
-input[type=file] { width: 100%; padding: 12px; background: #14161a; border: 1px dashed #3a3f49; border-radius: 8px; color: var(--txt); }
-button { background: var(--acc); color: #1a1207; border: 0; border-radius: 9px; padding: 12px 20px; font-weight: 700; font-size: 16px; cursor: pointer; }
-button:disabled { opacity: .5; cursor: not-allowed; }
-.dl { display: inline-block; margin-left: 12px; background: var(--ok); color: #06210d; padding: 12px 18px; border-radius: 9px; font-weight: 700; text-decoration: none; }
-.log { white-space: pre-wrap; font: 13px/1.45 ui-monospace, Menlo, Consolas, monospace; background: #0e1013; border-radius: 8px; padding: 12px; max-height: 280px; overflow: auto; margin-top: 14px; }
-footer { margin-top: 18px; text-align: center; }
+
+html, body, #root { height: 100%; }
+body { background-color: var(--color-bg); color: var(--color-ink); }

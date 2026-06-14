@@ -4,6 +4,7 @@ interface WasmExports {
   alloc(size: number): number;
   dealloc(ptr: number, size: number): void;
   dex_fixup(ptr: number, len: number): void;
+  dex_tilt_rewrite(ptr: number, len: number, cap: number): number;
 }
 
 let cached: WasmExports | null = null;
@@ -25,4 +26,22 @@ export async function dexFixup(dex: Uint8Array): Promise<void> {
   w.dex_fixup(ptr, dex.length);
   dex.set(new Uint8Array(w.memory.buffer, ptr, dex.length));
   w.dealloc(ptr, dex.length);
+}
+
+/**
+ * Apply the full MCAccelerometer tilt fix to classes.dex via Rust→WASM (register/unregister
+ * byte-patches + onSensorChanged code-item rewrite + offset fixup + checksums), all atomically.
+ * Returns the NEW (grown) dex bytes, or null if the dex isn't the patchable 1.5.2 build
+ * (in which case the caller leaves classes.dex untouched — never half-patched).
+ */
+export async function dexTiltRewrite(dex: Uint8Array): Promise<Uint8Array | null> {
+  const w = await load();
+  const cap = dex.length + 1024; // headroom for the appended code_item (~88 B)
+  const ptr = w.alloc(cap);
+  new Uint8Array(w.memory.buffer, ptr, dex.length).set(dex);
+  const newLen = w.dex_tilt_rewrite(ptr, dex.length, cap);
+  let out: Uint8Array | null = null;
+  if (newLen > 0) out = new Uint8Array(w.memory.buffer, ptr, newLen).slice();
+  w.dealloc(ptr, cap);
+  return out;
 }

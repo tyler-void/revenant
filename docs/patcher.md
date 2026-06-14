@@ -22,10 +22,12 @@ the browser app. Sections:
   patch, group, desc}`. Each is verified against `expect` before writing (wrong/non-1.5.2 libgame
   → skip + warn, never corrupt). Groups: `unlock` / `fuel` / `nitro`. **DONE in the web app** —
   this is the easy, high-value core (all-unlocked + unlimited fuel/nitro).
-- **`dex`** — TODO (the hard part): in-place DEX bytecode patches (tilt fix in MCAccelerometer;
-  IAP unlock) that today need apktool. Must become no-recompiler byte-patches for the browser.
-- **`androidManifest`** — add `HIGH_SAMPLING_RATE_SENSORS` (binary AXML edit; TODO test if
-  droppable).
+- **`dex.tilt`** — ✅ DONE. The MCAccelerometer tilt fix, applied **atomically** by the Rust→WASM
+  `dex_tilt_rewrite` (a real DEX **code-item rewrite**, not a byte-patch — see "Rust→WASM core").
+- **`androidManifest`** — ✅ DONE. In-browser **binary-AXML editing** (`web/src/axml.ts`,
+  `stripManifest`): drops tracking `<uses-permission>` elements AND tracking/push/ad `<service>`/
+  `<receiver>`/`<permission>` components. We do NOT add `HIGH_SAMPLING_RATE_SENSORS` — `register()`
+  uses `SENSOR_DELAY_GAME` (~50 Hz, below the 200 Hz gate), so it isn't needed (device-confirmed).
 - **`addFiles`** — optional libmod.so mod-menu inject (deferred; not needed to "just play").
 
 ## Status (2026-06-14)
@@ -38,30 +40,57 @@ the browser app. Sections:
   **VERIFIED end-to-end on the real `Bike+Rivals_1.5.2_APKPure.apk`**: 14/14 native patches
   matched + applied, 957 entries signed, `jarsigner -verify` exit 0 (`web/sign-test.ts` +
   `web/full-test.ts` are the dev harnesses; run with `bun run sign-test.ts`).
-- ✅ **TILT fix DONE — in-place DEX byte-patch (no apktool) + Rust→WASM checksum.** Key insight:
-  `onResume()` already calls `register()` unconditionally; `register()` only skips because of its
-  internal `if-eqz isEnabled` gate. So a MINIMAL same-size variant works: NOP that gate
-  (`0x43fc46` `38000b00`→`00000000`) + neuter `unregister()` (`0x43fca4` `6300b943`→`0e000000`,
-  return-void) — keeping the game's ORIGINAL rotation-aware `onSensorChanged`. After byte-patching,
-  the DEX Adler32 (off 8) + SHA-1 (off 12) are recomputed by **`wasm/` (Rust→WASM `dex_fixup`)** —
-  verified byte-identical to a Python reference. (`web/src/wasm.ts` loads the .wasm; offsets are for
-  the 1.5.2 classes.dex, verified against `expect`.)
+- ✅ **TILT fix DONE — full DEX code-item rewrite in Rust→WASM (no apktool), device-verified.**
+  The minimal same-size byte-patch (NOP the `register()` `isEnabled` gate + neuter `unregister()`)
+  CRASHES: with the sensor force-registered, the game's `onSensorChanged(SensorEvent)` forwards to
+  the **native** `onSensorChanged(FFFJ)` before `libgame.so` binds it → `UnsatisfiedLinkError`. The
+  proper fix needs the native call wrapped in try/catch, plus the modern-landscape axis remap — i.e.
+  a **method-body REWRITE** (registers 6→7, different insns), which can't be a same-size patch.
+  `dex_tilt_rewrite` (wasm/src/lib.rs) does it atomically:
+  1. Resolves the 5 field/method refs (`SensorEvent.sensor/values/timestamp`, `Sensor.getType`,
+     native `onSensorChanged(FFFJ)`) by descriptor — all already in the 1.5.2 pool.
+  2. Builds a NEW `code_item` (landscape map: gameX=sensorY, gameY=−sensorX, gameZ=sensorZ; native
+     call bracketed by a **catch-all** handler — no new type_id needed) and **appends** it at the end
+     of the code section, repointing the method's `code_off` (uleb, same width) to it.
+  3. Shifts every u32 file-offset ≥ the insertion point by +K (string_data_off[], proto params,
+     class_def offsets, code_item debug_off[] over all 36 976 items, annotation dirs/sets/refs, map
+     offsets) and bumps the map's `TYPE_CODE_ITEM` count; the old code_item is left as harmless dead
+     data. Plus the two same-size byte-patches (register/unregister) and a final Adler32+SHA-1.
+  - If the dex isn't the patchable 1.5.2 layout (descriptor/`expect` checks fail) it returns 0 and
+    classes.dex is left **untouched** — never half-patched (a half fix is the crashing config).
+  - **Verified**: the Rust output is **byte-identical** to a Python oracle; the oracle was confirmed
+    by **baksmali (dexlib2, strict parser)** showing the correct smali for all three methods; the
+    final APK's `classes.dex` re-baksmali's cleanly and `jarsigner -verify` passes; and the
+    browser-built APK was **installed on Android 13 and tilt-steered in-game** (only "Motion"/sensor
+    access granted).
+- ✅ **PRIVACY cull DONE — in-browser binary-AXML editing (`web/src/axml.ts`).** Splices out
+  `<uses-permission>` (location/accounts/billing/push) and tracking **components** (GCM
+  service+receiver+permission = MIUI's "Send MMS", AdX ad tracker, OpenUDID device-ID, BOOT receiver)
+  by removing each element's START→matching-END chunk span and decrementing the root chunk size — no
+  other fixups (AXML chunks reference the pool by index and each other by order). Result verified with
+  **aapt2 dump badging** (7 benign perms remain; trackers gone). NOTE: MIUI's first-launch review also
+  lists generic AppOps (clipboard, installed-apps, background-windows) that are NOT manifest-backed
+  for a legacy targetSdk-22 app and can't be removed without a risky targetSdk bump; they default OFF.
+- 📱 **End-user note (in the patcher UI + below):** after install, on first launch grant **only
+  "Motion"/sensor access** (for tilt) and leave every other toggle OFF — the game is fully offline.
 
 ## ✅ Rust→WASM core (`wasm/`)
 - Toolchain: **rustup stable + `wasm32-unknown-unknown` target** (owner installed rustup). No
   wasm-pack/wasm-bindgen needed — **raw C-ABI** (`alloc`/`dealloc` + fns over linear memory),
   built with `cargo build --target wasm32-unknown-unknown --release` (25 KB .wasm, `sha1` crate),
   loaded in the app via `WebAssembly.instantiate`. Copied to `web/public/revenant_wasm.wasm`.
-- Today: `dex_fixup` (Adler32 + SHA-1 recompute). **Next: APK v2/v3 signing in this crate** — the
-  genuinely-Rust-worthy part (robust installs on modern Android; the APK Signing Block is painful
-  in TS). v1 signing currently in TS (node-forge); v2/v3 → Rust→WASM.
+- Today: `dex_fixup` (Adler32 + SHA-1 recompute) **and `dex_tilt_rewrite`** (the full code-item
+  rewrite above). **Next (optional): APK v2/v3 signing in this crate** — robust installs on modern
+  Android; the APK Signing Block is painful in TS. v1 signing currently in TS (node-forge) and it
+  already installs on Android 13, so v2/v3 is a nice-to-have, not a blocker.
 
 ## Remaining milestones
-1. **TEST INSTALL on a modern device.** v1-only should install for this APK (targetSdk=22 →
-   Android 11+ accepts v1 for pre-R targets). If rejected, the Rust→WASM v2/v3 signer closes it.
-2. **APK v2/v3 signing in `wasm/`** (Rust crates: `rsa`/`sha2` + the APK Signing Block).
-3. **GitHub Pages deploy** (Actions build of `web/` + `wasm/` → Pages).
-4. **Refactor `apply_patches.py`** to read `patches/manifest.json` (one source for CLI + web).
+1. ✅ ~~TEST INSTALL on a modern device~~ — done: browser-built APK installs on Android 13, boots,
+   and tilt-steers in-game (only "Motion"/sensor access granted).
+2. **GitHub Pages deploy** (Actions build of `web/` + `wasm/` → Pages).
+3. **Refactor `apply_patches.py`** to read `patches/manifest.json` (one source for CLI + web).
+4. (Optional) **APK v2/v3 signing in `wasm/`** (Rust `rsa`/`sha2` + the APK Signing Block) — v1
+   already installs on Android 13, so this is hardening, not required.
 
 Verification harnesses: `web/sign-test.ts` (v1 → jarsigner), `web/full-test.ts` (native+sign on the
 real APK → jarsigner exit 0), and the Rust→WASM `dex_fixup` was checked byte-identical to Python.

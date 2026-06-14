@@ -34,12 +34,20 @@ Android + offline — a great "just play" experience. Legal model stays BYO-orig
 **ACTIVE — full speed (in order): Phase 7 then Phase 8.** (Owner 2026-06-14: move on to 7+8;
 the rest are WIP.)
 - **Phase 7 — offline achievements** (IDs/conditions already extracted from ConditionInfo).
-- **Phase 8 — UX/UI: browser one-click patcher + codebase revamp + distribute.** Static
-  GitHub Pages app, BYO-original, patches the user's own APK IN-BROWSER (RAM, JSZip +
-  in-place offset patches from a shared `patches/manifest.json` + in-browser v1 signing).
-  Hard part = the tilt fix as an in-place DEX byte-patch (no apktool) + testing if the
-  manifest permission is droppable. Revamp = one declarative patch manifest feeding both
-  the CLI and the browser. (8 doesn't depend on 6/7 — could ship first for players ASAP.)
+- **Phase 8 — browser one-click patcher (`web/`, React+Vite+Tailwind+Bun).** Static GitHub Pages
+  app, BYO-original, patches the user's own APK IN-BROWSER (RAM, JSZip + shared
+  `patches/manifest.json` + in-browser v1 signing). **DONE + DEVICE-VERIFIED on Android 13:**
+  native byte-patches, **tilt fix as a real DEX code-item rewrite in Rust→WASM** (`dex_tilt_rewrite`
+  — NOT a byte-patch; the minimal byte-patch crashes with UnsatisfiedLinkError), **privacy cull via
+  in-browser binary-AXML editing** (`web/src/axml.ts` — drops tracking perms + GCM/AdX/OpenUDID/boot
+  components), Tailwind-responsive UI. The browser-built APK installs, boots, and tilt-steers (grant
+  only "Motion"/sensor). Full record: **[docs/patcher.md](docs/patcher.md)**.
+  **REMAINING:** GitHub Pages deploy (Actions); refactor `apply_patches.py` to read the manifest;
+  (optional) APK v2/v3 signing in `wasm/`. **DISTRIBUTION SPLIT (owner 2026-06-14):** only the
+  **unlock-all browser-patched APK** is distributed (the "just play" core, free). The **mod menu**
+  (Phase 6, `libmod.so`) is a personal/power-user extra the owner is considering paywalling
+  (Patreon/BMC) — but note `mod/mod.cpp` + `mod/build.sh` + `docs/modmenu.md` are ALREADY PUBLIC on
+  GPLv3 `origin/main`, so a closed paywall doesn't really hold; a donation/perk model fits.
 
 **WIP (usable, polish later):**
 - **Phase 6 — in-game LIVE mod menu (ImGui)** — DONE + device-verified: NDK `libmod.so`

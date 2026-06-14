@@ -29,15 +29,40 @@
   },
 
   "dex": {
-    "comment": "DEX byte-patch infra works (in-place same-size patch + Rust→WASM Adler32/SHA-1 recompute, see wasm/). BUT the MINIMAL tilt fix (force-register @0x43fc46 38000b00->00000000 + neuter unregister @0x43fca4 6300b943->0e000000) was DEVICE-TESTED and CRASHES: forcing register makes the game's original onSensorChanged forward to the NATIVE onSensorChanged(FFFJ) before libgame.so binds it -> UnsatisfiedLinkError. The proper fix needs a try/catch around the native call (what the apktool full-fix does) = a DEX code-item REWRITE (new exception handler, size change) — NOT a same-size byte-patch. That's the next Rust→WASM job (dex code-item editing). Patches disabled until then; the CLI build (build/apply_patches.py) keeps the working full tilt fix.",
+    "comment": "TILT FIX, fully in-browser (no apktool). Applied ATOMICALLY by the Rust→WASM dex_tilt_rewrite (wasm/src/lib.rs): the two same-size byte-patches below (register() always registers; unregister() neutered) PLUS a code-item REWRITE of onSensorChanged(SensorEvent)V — a new, larger code_item (modern landscape mapping + try/catch around the native onSensorChanged(FFFJ) call) is appended to the code section, the method's code_off is repointed to it, every u32 file-offset >= insertion point is shifted, and Adler32/SHA-1 are recomputed. The try/catch swallows the UnsatisfiedLinkError thrown by the early sensor events that fire before libgame.so binds the native method (the minimal byte-only patch crashed there). If the dex isn't the 1.5.2 build (descriptor/offset checks fail) the wasm returns 0 and classes.dex is left untouched — never half-patched. The byte-patch offsets are documented here for the record; the wasm verifies them against `expect` and applies them internally.",
     "file": "classes.dex",
-    "recomputeChecksum": true,
-    "patches": []
+    "tilt": {
+      "group": "tilt",
+      "method": "Lcom/miniclip/input/MCAccelerometer;->onSensorChanged(Landroid/hardware/SensorEvent;)V",
+      "desc": "Accelerometer tilt fix for modern Android (2014 game never registers the sensor on Android 13+)",
+      "bytePatches": [
+        { "name": "register.drop-isEnabled-gate", "off": "0x43fc46", "expect": "38000b00", "patch": "00000000", "desc": "register() always registers (NOP the isEnabled gate)" },
+        { "name": "unregister.neuter",            "off": "0x43fca4", "expect": "6300b943", "patch": "0e000000", "desc": "unregister() no-op so the sensor stays on (return-void; nop)" }
+      ]
+    }
   },
 
   "androidManifest": {
-    "comment": "Binary AXML edit: add HIGH_SAMPLING_RATE_SENSORS for the tilt fix on some hardware. TODO: test whether it is DROPPABLE (tilt may work without it), since editing binary AXML in-browser is non-trivial.",
-    "addPermissions": ["android.permission.HIGH_SAMPLING_RATE_SENSORS"]
+    "comment": "Privacy cull, fully in-browser (no apktool). The patcher edits the binary AXML directly (web/src/axml.ts): it splices out each listed <uses-permission> START+END chunk pair and decrements the root chunk size. AXML chunks reference the string pool by index and each other by order — nothing stores a byte offset — so removal needs no other fixups. Dropping ACCESS_COARSE_LOCATION also removes the framework-synthesized background/media-location; dropping the c2dm pair removes push (MIUI's 'send MMS'). The network trio + sensors + storage are KEPT (GameActivity throws SecurityException at startup without ACCESS_NETWORK_STATE — device-confirmed). Matches build/apply_patches.py DROP_PERMS. We do NOT add HIGH_SAMPLING_RATE_SENSORS: register() uses SENSOR_DELAY_GAME (~50Hz, below the 200Hz gate), so it isn't needed.",
+    "file": "AndroidManifest.xml",
+    "group": "privacy",
+    "dropPermissions": [
+      "android.permission.ACCESS_COARSE_LOCATION",
+      "android.permission.GET_ACCOUNTS",
+      "android.permission.USE_CREDENTIALS",
+      "com.android.vending.BILLING",
+      "com.miniclip.bikerivals.permission.C2D_MESSAGE",
+      "com.google.android.c2dm.permission.RECEIVE"
+    ],
+    "dropComponentsComment": "Tracking/push/ad components, useless offline. Removing the GCM service+receiver+permission kills MIUI's 'Send MMS messages' (it labels cloud-push as MMS); removing the BOOT_COMPLETED receiver kills the 'open windows in background' behavior; AdXAppTracker (ads) and OpenUDID_service (device-ID tracking) are pure telemetry. MIUI's 'installed apps list' and 'clipboard' toggles are NOT manifest-backed (generic AppOps for legacy targetSdk-22 apps) — not removable without a risky targetSdk bump.",
+    "dropComponents": [
+      { "tag": "service",    "name": "com.miniclip.bikerivals.BikeRivalsGCMIntentService" },
+      { "tag": "receiver",   "name": "com.miniclip.notifications.gcm.MCGCMBroadcastReceiver" },
+      { "tag": "permission", "name": "com.miniclip.bikerivals.permission.C2D_MESSAGE" },
+      { "tag": "receiver",   "name": "com.AdX.tag.AdXAppTracker" },
+      { "tag": "service",    "name": "com.miniclip.udid.OpenUDID_service" },
+      { "tag": "receiver",   "name": "com.miniclip.notifications.local.LocalNotificationBootReceiver" }
+    ]
   },
 
   "addFiles": {
