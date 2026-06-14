@@ -4,6 +4,48 @@
 > bike specs / name / gravity / physics, plus a top-of-screen debug HUD. Read before
 > touching the menu/HUD work.
 
+## ⚠️ OPEN / UNRESOLVED: the mod menu freezes the level run timer
+
+**Status (2026-06-14): NOT solved. Paused, documented honestly. Do not trust earlier "anti-tamper,
+fixed by gating" claims — the gated build STILL freezes the timer.**
+
+**Symptom (device-confirmed, consistent, on plain single-player / no-ghost levels):** with `libmod`
+active, the in-race level timer (top-right) stays stuck at `0.00` — the run never registers as
+started. The bike physics, controls, gravity, and the ImGui menu/HUD all work; only the timer is
+frozen. The **distributed browser-patched build (no mod menu) is unaffected** — its timer counts
+normally. So this is specific to the in-game `libmod`.
+
+**What we actually established (facts, via the `rvdebug.txt` bisect harness):**
+- **Overlay + touch only** (all game-logic hooks installed but passing straight through) → timer
+  **counts** (observed `2.63` on screen). So the inline-hook *install* itself is NOT the trigger.
+- Builds with the game-logic hook **bodies** running → timer **froze**.
+- **Bisecting did NOT cleanly isolate a single culprit — results were INCONSISTENT** across
+  near-identical configs: one round with `step+draw+ach` on (no spec writes) counted; a later build
+  with the same hooks + *gated* (write-nothing) specs froze. A pure-read speed HUD, the mod-loader
+  (`reader`) hook, and per-frame spec/gravity writes were each suspected at different points; **none
+  was consistently confirmed**, and the gated/safe-default build still freezes. So the root cause is
+  **unknown** — could be intermittent, state-dependent, or a per-frame interaction we didn't pin.
+
+**Plausible but UNPROVEN:** the game has online ghost-racing + server time submission
+(`SubmitGhost`/`submitTime`/`getTimes` in libgame), so a leaderboard/ghost integrity check that
+stalls the run on tamper is *plausible* — but we did **not** prove the trigger. Don't state it as fact.
+
+**Current mitigations (kept, but they do NOT fix it):** `apply_specs`/gravity gate on multiplier ≠ 1.0×
+(no writes at default), mod-loader off by default (`g_en_reader=0`), speed readout opt-in. These make
+the default mod do as little as possible to game state; the timer still freezes, so the cause is
+elsewhere (or intermittent).
+
+**Practical guidance:** treat the in-game mod menu as a **free-play / experimentation tool** where
+the run timer is unreliable. For real/timed play use the **distributed browser build (no mod menu)**.
+
+**Tooling that survives this (genuinely useful):** the **live-bisect harness** — `libmod` reads
+`<mods>/rvdebug.txt` at startup; each game hook (`step`/`draw`/`reader`/`ach`/`specs`) passes
+straight through when its flag is `0`, so you can toggle hooks via `build/bisect_modhooks.sh
+step=0 draw=0 …` (writes the file + cold-relaunches) — **no rebuild per step**. Frida is unstable on
+this 32-bit/Apportable target, so this in-process NDK harness is the right instrument if anyone
+resumes the investigation. **Next idea if resumed:** instrument the actual timer ivar + log it (vs
+theorising), and establish deterministic-vs-intermittent rigorously before bisecting.
+
 ## What's live-tunable (confirmed in libgame.so)
 
 - **Bike specs** — live setters exist: `setSpeedLimit:`, `setNitroPerformance:`,

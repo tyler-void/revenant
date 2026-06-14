@@ -53,11 +53,20 @@ the rest are WIP.)
 - **Phase 6 — in-game LIVE mod menu (ImGui)** — DONE + device-verified: NDK `libmod.so`
   injected, ImGui overlay (swapBuffers hook) + touch, tabbed menu (Drive/Bike/System),
   live **gravity** (−30×…+30×), **camera zoom** (flexible/locked), **bike specs**
-  (max speed/accel/handling/nitro[capped]/burnout, per-bike-safe), **debug HUD** (FPS/RAM/CPU),
-  **Reset Progress** (deletes ghosts+medals). Open: shop-bar mapping, multiple ghosts,
-  persist tunes. Full record: **[docs/modmenu.md](docs/modmenu.md)**.
+  (max speed/accel/handling/nitro[capped]/burnout, per-bike-safe), **debug HUD** (FPS/RAM/CPU +
+  opt-in **speed** via the back-wheel b2Body), **Reset Progress** (deletes ghosts+medals).
+  ⚠️ **OPEN/UNRESOLVED (2026-06-14): with `libmod` active the in-race level timer FREEZES at 0.00**
+  on normal single-player levels (everything else — physics, menu, HUD — works). Bisected hard via a
+  live **runtime-toggle harness** (`rvdebug.txt` + `build/bisect_modhooks.sh`, no rebuild per step):
+  overlay-only counts; running the game-logic hook bodies freezes it; but **no single culprit was
+  consistently isolated** (near-identical configs gave opposite results). Leaderboard anti-tamper is
+  *plausible but UNPROVEN* — do NOT claim it as fact. Safe-default gating (specs/gravity write only
+  when mult≠1.0×; mod-loader off; speed opt-in) is kept but **does NOT fix it**. Treat the mod menu
+  as a **free-play tool (timer unreliable)**; the distributed browser build (no mod menu) is fine.
+  Paused per owner. Full honest record: **[docs/modmenu.md](docs/modmenu.md)**.
 - **Phase 3 — level editor** (editor+encode done; WYSIWYG render fidelity imperfect).
 - **Phase 4 — mod-loader** done (drop `mods/<w>_<l>.dat`, no root); World-5 slot pending.
+  NOTE: its decrypt-path hook was a *suspect* in the Phase-6 timer freeze, so it's now OFF by default.
 
 **PAUSED (not abandoned):** World 5 + procedural generation — see
 **[docs/procgen.md](docs/procgen.md)** (deep RE in progress: dynamic-trace toolkit works,

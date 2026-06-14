@@ -150,3 +150,32 @@
   GCM components is still worth it (kills the actual push/"MMS" capability + the tracker).
 - **Tilt needs no `HIGH_SAMPLING_RATE_SENSORS`:** `register()` uses `SENSOR_DELAY_GAME`
   (~50 Hz, under the 200 Hz gate). End users only grant "Motion"/sensor access; nothing else.
+
+## Mod menu vs the run timer (Phase 6) — UNRESOLVED, and a lesson in not over-claiming
+
+- **OPEN BUG (not solved):** with `libmod` active the in-race level timer freezes at 0.00 on normal
+  single-player levels. Overlay-only (hooks installed but passing through) counts; running the
+  game-logic hook bodies freezes it — but **no single culprit was consistently isolated** (the same
+  config that counted in one round froze in a later build). Leaderboard anti-tamper is *plausible*
+  (online ghost-racing + `SubmitGhost`/`submitTime`) but was **NOT proven**. Full record: modmenu.md.
+- **Don't write up an unproven theory as fact.** I prematurely documented "it's anti-tamper on
+  per-frame writes, fixed by gating" — but the gated, write-nothing build STILL freezes, so that was
+  wrong. State what you *measured*; label hypotheses as hypotheses. (The owner rightly called this
+  out: "don't fabricate.")
+- **Single noisy runs make spurious correlations.** The "speed readout freezes it" belief held for
+  ~15 cycles, then collapsed — every full-mod build had other hooks active too. **Before bisecting,
+  establish deterministic-vs-intermittent (retry the SAME build 3–4×).** Inconsistent results across
+  near-identical configs = you're not measuring what you think; instrument the actual value (the
+  timer ivar), don't infer it from a feature toggle.
+- **Bisect with RUNTIME-TOGGLEABLE hooks, not rebuilds** (the one unambiguous win here). A flags file
+  (`rvdebug.txt`) each hook
+  reads at startup — pass-through when its flag is 0 — turns a 5-minute rebuild/reinstall per bisect
+  step into a push-file + relaunch (seconds). `build/bisect_modhooks.sh` automates it. This is the
+  single biggest debugging-velocity win for native mods.
+- **`adb install -r` doesn't reliably kill the running process** → you can end up testing the OLD
+  libmod. Always `am force-stop` before relaunch, and log a BUILDTAG so you can confirm from logcat
+  which build is actually live.
+- **Apportable realizes ObjC ivar offsets at runtime** — the static offset (e.g. backWheel_ @0x54)
+  is wrong; read the realized offset from the `_OBJC_IVAR_$_…` variable at runtime (`*(g_base+var)`).
+- **Frida is unstable on 32-bit/thumb Apportable and trips anti-tamper** — the in-process NDK
+  `libmod` (inline hooks + ImGui) is the right instrument here, not Frida.

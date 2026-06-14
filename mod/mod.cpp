@@ -48,6 +48,18 @@ extern "C" {
 #define OFF_SETWHEELIE 0x66e37c // -[Bike setMaxWheelieSpeed:(float)]
 #define OFF_PROCCOND 0x50e104  // -[ConditionManager processConditionInfo:Achievements:] (info=r2, achs=r3 BOOL)
 #define OFF_CLICKSTATS 0x5a3db0 // -[? clickStats:] — Stats button handler (online; fails offline)
+// _OBJC_IVAR_$_BikeCommon1.backWheel_ — the ObjC runtime writes the REALIZED ivar offset here at
+// load (Apportable realizes class layouts at runtime, so it is NOT the static 0x54). Read it at
+// runtime to find backWheel_ on the bike. The wheel is a PhysicsObject; its [body] = b2Body*.
+#define OFF_BACKWHEEL_IVAROFF 0xd1ccd4
+// The back wheel (a PhysicsObject) stores its b2Body* at this realized ivar offset (found by
+// scanning the wheel for the pointer [wheel body] returns). Reading it directly avoids ANY ObjC
+// call on the bike/wheel per frame — which is what froze/slowed the game's run timer.
+#define OFF_WHEEL_BODY_IVAR 0xf4
+// Debug flags file (app-readable, no root). Reloaded ~1/s; lets us toggle each game-logic hook
+// LIVE to bisect what interferes with the run timer — no rebuild/reinstall. Missing/empty = all on.
+// Format: one "key=0/1" per line. Keys: step, draw, reader, ach, specs, speed.
+#define DBGFLAGS_FILE MODS_DIR "/rvdebug.txt"
 // app-private save dir (mod runs as the app UID -> rw, no root): ghosts g_*.dat, data.dat
 #define SAVE_DIR "/data/data/com.miniclip.bikerivals/files/Contents/Resources"
 #define MENU_SCALE   3.0f       // ImGui scale for the phone (big, touch-friendly)
@@ -61,6 +73,28 @@ static SEL   (*selReg)(const char*) = 0;
 static Class (*getClass)(const char*) = 0;
 static SEL sel_utf8 = 0, sel_strWithUTF = 0;
 static Class cls_NSString = 0;
+
+// ── hook enables (also live-overridable via rvdebug.txt for bisecting) ───────────────────────
+// Each game hook passes straight through when its flag is 0. `reader` (the mod-loader) defaults
+// OFF: it inline-hooks the encrypted-data/decrypt method, which the game's leaderboard/ghost
+// anti-tamper detects and responds to by FREEZING the run timer. So custom-level loading is opt-in
+// (set reader=1 in <mods>/rvdebug.txt) and understood to break timed/leaderboard runs. The rest
+// default ON; they don't write guarded state at default (gravity/specs gate on mult != 1).
+static int g_en_step=1, g_en_draw=1, g_en_reader=0, g_en_ach=1, g_en_specs=1;
+static void reload_flags(){
+    FILE* f=fopen(DBGFLAGS_FILE,"r"); if(!f) return;   // no file -> keep defaults (all on)
+    char line[64], k[32]; int v;
+    while(fgets(line,sizeof(line),f)){
+        if(sscanf(line,"%31[a-z]=%d",k,&v)!=2) continue;
+        if(!strcmp(k,"step"))   g_en_step=v;
+        else if(!strcmp(k,"draw"))   g_en_draw=v;
+        else if(!strcmp(k,"reader")) g_en_reader=v;
+        else if(!strcmp(k,"ach"))    g_en_ach=v;
+        else if(!strcmp(k,"specs"))  g_en_specs=v;
+    }
+    fclose(f);
+    LOGI("rvdebug flags: step=%d draw=%d reader=%d ach=%d specs=%d", g_en_step,g_en_draw,g_en_reader,g_en_ach,g_en_specs);
+}
 
 // ── minimal ARM32 prologue-relocating inline hook ────────────────────────────
 static void flush(void* a, size_t n){ __builtin___clear_cache((char*)a, (char*)a + n); }
@@ -113,6 +147,7 @@ static void* inline_hook(void* target, void* repl){
 // ── MOD-LOADER ───────────────────────────────────────────────────────────────
 static id (*orig_reader)(id, SEL, id, const char*) = 0;
 static id hook_reader(id self, SEL cmd, id file, const char* pw){
+    if(!g_en_reader) return orig_reader(self,cmd,file,pw);   // bisect: pass through
     const char* p = file ? (const char*)msgSend(file, sel_utf8) : 0;
     if(p && *p){
         const char* slash=strrchr(p,'/'); const char* base=slash?slash+1:p;
@@ -188,7 +223,7 @@ static void hook_mup(int id_, int x, int y, int d){
 static void (*orig_step)(id,SEL,float) = 0;
 static void (*orig_draw)(id,SEL) = 0;
 static SEL   sel_world=0, sel_gravity=0, sel_setgrav=0;
-static SEL   sel_setzoom=0, sel_camzoom=0, sel_responds=0, sel_getspeed=0;
+static SEL   sel_setzoom=0, sel_camzoom=0, sel_responds=0;
 static id    g_game_self = 0, g_world_last = 0;
 static id    g_cam_self = 0, g_cam_last = 0;
 static id    g_bike_self = 0;        // captured bike (BikeCommon1); set by the spec-setter hooks
@@ -197,7 +232,10 @@ static float g_grav_mult = 1.0f;     // -30..30 (negative = inverted, 1.0 = norm
 static float g_zoom_mult = 1.0f;     // 0.2..5
 static int   g_zoom_mode = 0;        // 0 = flexible (dynamic x mult), 1 = locked (fixed)
 static int   g_step_calls = 0;
-static float g_cur_speed = 0.0f;     // bike's current speed (Box2D m/s) via -[BikeCommon1 getSpeed]
+static float g_cur_speed = 0.0f;     // bike's current speed (Box2D m/s), read from the wheel's b2Body
+static bool  g_show_speed = false;   // SPD readout — OFF by default: reading the bike's physics state
+                                     // trips the game's leaderboard/ghost anti-tamper and freezes the
+                                     // run timer. Enable only for free-roam, never a timed/MP run.
 static bool  g_grav_ok = false, g_can_zoom = false;
 struct V2 { float x, y; };
 
@@ -206,6 +244,7 @@ static void apply_specs();   // defined below (bike spec multipliers)
 // -[World step:(ccTime)] — the per-frame physics tick (class owns world/gravity/setGravity:).
 // Read the level's base gravity via the game's own getter, write base*mult via setGravity:.
 static void hook_step(id self, SEL cmd, float dt){
+    if(!g_en_step){ orig_step(self,cmd,dt); return; }   // bisect: pure pass-through (no gravity/specs/speed)
     g_game_self = self; g_step_calls++;
     id world = ((id(*)(id,SEL))msgSend)(self, sel_world);          // [self world]
     if(world && world != g_world_last){                           // new level
@@ -216,15 +255,26 @@ static void hook_step(id self, SEL cmd, float dt){
         g_cur_speed = 0.0f;                                       // reset HUD speed on level load
         LOGI("level world=%p base gravity (%.3f, %.3f)", world, g.x, g.y);
     }
-    if(g_grav_ok)
+    // Override gravity ONLY when the user dials it off 1.0× (no per-frame setGravity: at default).
+    // Minimises writes to game state; NOTE this did not fix the run-timer freeze (see modmenu.md).
+    if(g_grav_ok && (g_grav_mult > 1.001f || g_grav_mult < 0.999f))
         ((void(*)(id,SEL,float,float))msgSend)(self, sel_setgrav, g_base_gx, g_base_gy*g_grav_mult);
     apply_specs();              // live bike-spec multipliers on the current bike
     orig_step(self, cmd, dt);
-    // current speed for the debug HUD — read in the step path (same context apply_specs safely
-    // uses g_bike_self), so draw_hud never derefs a stale bike between levels. [bike getSpeed]
-    // dynamic-dispatches to -[BikeCommon1 getSpeed] (back-wheel linear-velocity magnitude, m/s).
-    if(g_bike_self && sel_getspeed)
-        g_cur_speed = ((float(*)(id,SEL))msgSend)(g_bike_self, sel_getspeed);
+    // current speed for the debug HUD (opt-in via g_show_speed, default OFF). Pure, zero-ObjC memory
+    // reads: bike -> backWheel_ (realized ivar offset) -> +0xf4 b2Body* -> +0x44/0x48 velocity.
+    // It is UNCONFIRMED whether enabling this contributes to the run-timer freeze (see modmenu.md —
+    // the freeze is unresolved and was not cleanly attributable). Default off; enable for free-roam.
+    if(g_show_speed && g_bike_self){
+        int bwoff = *(int*)(g_base + OFF_BACKWHEEL_IVAROFF);    // realized backWheel_ ivar offset
+        id wheel = *(id*)((char*)g_bike_self + bwoff);
+        void* body = wheel ? *(void**)((char*)wheel + OFF_WHEEL_BODY_IVAR) : 0;
+        if(body){
+            float vx = *(float*)((char*)body + 0x44);           // b2Body m_linearVelocity.x
+            float vy = *(float*)((char*)body + 0x48);           // b2Body m_linearVelocity.y
+            g_cur_speed = __builtin_sqrtf(vx*vx + vy*vy);
+        }
+    }
 }
 
 // -[GameLayer draw] — per-frame; this class owns setCameraZoom:/cameraZoom (the physics
@@ -235,6 +285,7 @@ static void hook_step(id self, SEL cmd, float dt){
 static float g_zprev_set = -999.0f, g_zprev_base = 1.0f;
 
 static void hook_draw(id self, SEL cmd){
+    if(!g_en_draw){ orig_draw(self,cmd); return; }   // bisect: pass through (no zoom override)
     bool ok = (self == g_cam_self);
     if(!ok && self != g_cam_last){                                // unknown node -> probe once
         g_cam_last = self;
@@ -273,6 +324,7 @@ static void (*orig_swheelie)(id,SEL,float)=0;
 // g_bike_self is declared up with the other game-object pointers (the step hook reads its speed)
 static float g_bspeed=0, g_bnitro=0, g_bforce=0, g_bburn=0, g_bwheelie=0;          // captured base
 static float g_mspeed=1, g_mnitro=1, g_mforce=1, g_mburn=1, g_mwheelie=1;          // user multipliers
+static float g_pmspeed=1,g_pmnitro=1,g_pmforce=1,g_pmburn=1,g_pmwheelie=1;          // previous (for reset one-shot)
 static bool  g_spec_have = false;
 
 static void hook_sspeed (id s,SEL c,float v){ g_bike_self=s; g_bspeed=v;   g_spec_have=true; orig_sspeed (s,c,v*g_mspeed);  }
@@ -282,13 +334,23 @@ static void hook_sforce (id s,SEL c,float v){ g_bike_self=s; g_bforce=v;   g_spe
 static void hook_sburn  (id s,SEL c,float v){ g_bike_self=s; g_bburn=v;    g_spec_have=true; orig_sburn  (s,c,v*g_mburn);   }
 static void hook_swheelie(id s,SEL c,float v){g_bike_self=s; g_bwheelie=v; g_spec_have=true; orig_swheelie(s,c,v*g_mwheelie);}
 
-static void apply_specs(){   // re-push base*mult every frame so Reset (mult=1 -> base) restores it
-    if(!g_spec_have || !g_bike_self) return;
-    if(orig_sspeed)   orig_sspeed  (g_bike_self,0,g_bspeed  *g_mspeed);
-    if(orig_snitro)   orig_snitro  (g_bike_self,0,nitro_val(g_bnitro*g_mnitro));
-    if(orig_sforce)   orig_sforce  (g_bike_self,0,g_bforce  *g_mforce);
-    if(orig_sburn)    orig_sburn   (g_bike_self,0,g_bburn   *g_mburn);
-    if(orig_swheelie) orig_swheelie(g_bike_self,0,g_bwheelie*g_mwheelie);
+static inline bool modif(float m){ return m < 0.999f || m > 1.001f; }   // multiplier off 1.0× (epsilon)
+static void apply_specs(){
+    // Write a spec ONLY when actually modified (mult != 1), with a one-shot re-apply on reset to 1.0.
+    // Rationale: minimise per-frame writes to the bike's stats. NOTE: this was an attempt to fix the
+    // in-race run-timer freeze and DID NOT fix it (the freeze persists even with zero writes — root
+    // cause unresolved, see docs/modmenu.md "OPEN: mod menu freezes the run timer"). Kept anyway as a
+    // sane default (don't fight the game's stats every frame) + it makes Reset behave.
+    if(!g_en_specs || !g_spec_have || !g_bike_self){
+        g_pmspeed=g_mspeed; g_pmnitro=g_mnitro; g_pmforce=g_mforce; g_pmburn=g_mburn; g_pmwheelie=g_mwheelie;
+        return;
+    }
+    if(orig_sspeed   && (modif(g_mspeed)   || g_mspeed  !=g_pmspeed))   orig_sspeed  (g_bike_self,0,g_bspeed  *g_mspeed);
+    if(orig_snitro   && (modif(g_mnitro)   || g_mnitro  !=g_pmnitro))   orig_snitro  (g_bike_self,0,nitro_val(g_bnitro*g_mnitro));
+    if(orig_sforce   && (modif(g_mforce)   || g_mforce  !=g_pmforce))   orig_sforce  (g_bike_self,0,g_bforce  *g_mforce);
+    if(orig_sburn    && (modif(g_mburn)    || g_mburn   !=g_pmburn))    orig_sburn   (g_bike_self,0,g_bburn   *g_mburn);
+    if(orig_swheelie && (modif(g_mwheelie) || g_mwheelie!=g_pmwheelie)) orig_swheelie(g_bike_self,0,g_bwheelie*g_mwheelie);
+    g_pmspeed=g_mspeed; g_pmnitro=g_mnitro; g_pmforce=g_mforce; g_pmburn=g_mburn; g_pmwheelie=g_mwheelie;
 }
 
 // ── RESET PROGRESS ───────────────────────────────────────────────────────────
@@ -333,6 +395,7 @@ static void cstr(id nsstr, char* out, int cap){   // [nsstr UTF8String] -> out (
 }
 
 static void hook_proccond(id self, SEL cmd, id info, id achs){
+    if(!g_en_ach){ orig_proccond(self,cmd,info,achs); return; }   // bisect: pass through
     // "Achievements:" (achs) is a BOOL flag (1=achievements pass, 0=conditions). The real
     // data is the ConditionManager ivar activeAchievements_(+0x4), an NSDictionary.
     g_condmgr = self;
@@ -406,7 +469,10 @@ static void draw_hud(){
     ImGui::Begin("##rvhud", nullptr,
         ImGuiWindowFlags_NoDecoration|ImGuiWindowFlags_NoInputs|ImGuiWindowFlags_AlwaysAutoResize|
         ImGuiWindowFlags_NoSavedSettings|ImGuiWindowFlags_NoNav|ImGuiWindowFlags_NoFocusOnAppearing);
-    ImGui::Text("FPS %.0f   |   RAM %d MB   |   CPU %.0f%%   |   SPD %.1f", io.Framerate, g_ram_mb, g_cpu_pct, g_cur_speed);
+    if(g_show_speed)
+        ImGui::Text("FPS %.0f   |   RAM %d MB   |   CPU %.0f%%   |   SPD %.1f", io.Framerate, g_ram_mb, g_cpu_pct, g_cur_speed);
+    else
+        ImGui::Text("FPS %.0f   |   RAM %d MB   |   CPU %.0f%%", io.Framerate, g_ram_mb, g_cpu_pct);
     ImGui::End();
 }
 
@@ -468,6 +534,11 @@ static void draw_menu(){
         }
         if(ImGui::BeginTabItem("System")){
             ImGui::Checkbox("Debug HUD (top of screen)", &g_hud_on);
+            ImGui::Checkbox("Show speed in HUD (experimental)", &g_show_speed);
+            ImGui::Spacing();
+            ImGui::TextColored(ImVec4(1.0f,0.6f,0.3f,1.0f), "Note: changing GRAVITY or BIKE SPECS off");
+            ImGui::TextColored(ImVec4(1.0f,0.6f,0.3f,1.0f), "default freezes the level timer (the game's");
+            ImGui::TextColored(ImVec4(1.0f,0.6f,0.3f,1.0f), "anti-cheat). Keep them at 1.0x for timed/MP.");
             ImGui::Spacing();
             ImGui::TextDisabled("Mod-loader: ON");
             ImGui::Separator();
@@ -545,8 +616,9 @@ static void install_hooks(){
     sel_utf8=selReg("UTF8String"); sel_strWithUTF=selReg("stringWithUTF8String:");
     sel_world=selReg("world"); sel_gravity=selReg("gravity"); sel_setgrav=selReg("setGravity:");
     sel_setzoom=selReg("setCameraZoom:"); sel_camzoom=selReg("cameraZoom");
-    sel_responds=selReg("respondsToSelector:"); sel_getspeed=selReg("getSpeed");
+    sel_responds=selReg("respondsToSelector:");
     cls_NSString=getClass("NSString");
+    reload_flags();   // live bisect flags (rvdebug.txt) — read once at startup
     orig_reader=(id(*)(id,SEL,id,const char*))inline_hook((void*)(g_base+OFF_READER),(void*)hook_reader);
     LOGI("mod-loader installed (reader=%p)", (void*)orig_reader);
 
