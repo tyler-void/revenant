@@ -31,17 +31,8 @@ dead ~2020); our patched build is all-unlocked + fuel-fixed + TILT-FIXED-for-mod
 Android + offline — a great "just play" experience. Legal model stays BYO-original
 (ship methods only; distributing the patched APK is the 🔴 line).
 
-**ACTIVE — full speed (in order):**
-- **Phase 6 — in-game LIVE mod menu (ImGui)** + debug HUD. Live-tune bike specs
-  (`setSpeedLimit:`/`setNitroPerformance:`/`setForceScale:`/`setMaxWheelieSpeed:`/
-  `setBurnoutSpeed:`), bike name (`setName:`), **gravity** (Box2D `b2World.m_gravity`),
-  physics (restitution/friction/density). Appearance-swap among existing looks OK;
-  custom art = mod-loader later. Debug HUD = top-of-screen telemetry (rotation `currentRotation_`,
-  speed `getSpeed`/`linearVelocity_`, current bike `currentBikeIndex_`/`getBikeDisplayName:`,
-  air time `airTime_`, flips, FPS via cocos2d `_FPSLabel`/`displayStats`, RAM/CPU).
-  Game is GLES2/EGL (`libGLESv2.so`) → ImGui injects via eglSwapBuffers hook + touch
-  routing (the big new build); native-cocos2d UI is the fallback. Plan/findings:
-  **[docs/modmenu.md](docs/modmenu.md)**.
+**ACTIVE — full speed (in order): Phase 7 then Phase 8.** (Owner 2026-06-14: move on to 7+8;
+the rest are WIP.)
 - **Phase 7 — offline achievements** (IDs/conditions already extracted from ConditionInfo).
 - **Phase 8 — UX/UI: browser one-click patcher + codebase revamp + distribute.** Static
   GitHub Pages app, BYO-original, patches the user's own APK IN-BROWSER (RAM, JSZip +
@@ -49,6 +40,16 @@ Android + offline — a great "just play" experience. Legal model stays BYO-orig
   Hard part = the tilt fix as an in-place DEX byte-patch (no apktool) + testing if the
   manifest permission is droppable. Revamp = one declarative patch manifest feeding both
   the CLI and the browser. (8 doesn't depend on 6/7 — could ship first for players ASAP.)
+
+**WIP (usable, polish later):**
+- **Phase 6 — in-game LIVE mod menu (ImGui)** — DONE + device-verified: NDK `libmod.so`
+  injected, ImGui overlay (swapBuffers hook) + touch, tabbed menu (Drive/Bike/System),
+  live **gravity** (−30×…+30×), **camera zoom** (flexible/locked), **bike specs**
+  (max speed/accel/handling/nitro[capped]/burnout, per-bike-safe), **debug HUD** (FPS/RAM/CPU),
+  **Reset Progress** (deletes ghosts+medals). Open: shop-bar mapping, multiple ghosts,
+  persist tunes. Full record: **[docs/modmenu.md](docs/modmenu.md)**.
+- **Phase 3 — level editor** (editor+encode done; WYSIWYG render fidelity imperfect).
+- **Phase 4 — mod-loader** done (drop `mods/<w>_<l>.dat`, no root); World-5 slot pending.
 
 **PAUSED (not abandoned):** World 5 + procedural generation — see
 **[docs/procgen.md](docs/procgen.md)** (deep RE in progress: dynamic-trace toolkit works,

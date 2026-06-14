@@ -126,10 +126,132 @@ that also unlocks the ImGui menu). Pipeline, all device-verified:
   `screencap` = black) → `ffmpeg` 1 frame → readable; `adb shell input tap/swipe` in
   landscape 2340×1080 coords. Lets the agent see + drive the game without the user.
 
-## NEXT (Phase 6 continued)
-- ImGui menu (now feasible with the NDK + libmod): hook `eglSwapBuffers` to draw, route
-  touch, expose live bike-spec/gravity sliders (gravity via the proven `setGravity:`
-  path) + the debug HUD; "Save" writes a mod-config / `mods/` files (root-free persist).
+## ✅ IMGUI MENU LIVE + INTERACTIVE (2026-06-14) — device-verified by owner
+The in-game ImGui menu now renders AND takes touch (owner confirmed: "tap, resize and
+checkbox works fine"). All in `mod/mod.cpp`:
+- **Draw:** hook cocos2d `swapBuffers`@0x4d095c (ARM, in libgame) — scene drawn + GL
+  current; draw ImGui on top, then call orig (presents). NOT `eglSwapBuffers` (libEGL is
+  Thumb + not in libgame's dynsym → inline-hook crash, dead end). GLES2 backend,
+  `#version 100`, `-static-libstdc++` (no libc++_shared in the APK).
+- **Readable on a phone:** `MENU_SCALE 3.0` via `io.FontGlobalScale` +
+  `GetStyle().ScaleAllSizes()` at init (owner: default was "too small").
+- **TOUCH — the real handlers are Miniclip C funcs, NOT ObjC.** `MtouchDown`@0x701958 /
+  `MtouchMove`@0x702000 / `MtouchUp`@0x701c20 (libgame dynsym), called by the JNI
+  `Java_com_miniclip_input_MCInput_nativeTouches{Begin,Move,End}`. Signature
+  `M*(int id=r0, int x=r1, int y=r2, int d=r3)`; x/y are **screen pixels = GL viewport
+  space** (1:1, scale calibrated to 1.0 via the on-screen cursor landing on the tap).
+  The JNI converts MotionEvent floats→ints then calls these. (The earlier guess that
+  0x4d0b54/0x4d0bac/0x4d0c04 were `-[CCView touchesBegan:…]` was WRONG — those are
+  sub-functions of MtouchDown/Up; hooking them as ObjC methods crashed. The crash
+  backtrace `nativeTouchesEnd → MtouchUp → 0x4d0c04` is what revealed the real path.)
+- **Same-thread input:** MtouchDown/Move/Up run on the **GLThread** (same as swapBuffers,
+  via GLSurfaceView.queueEvent) → feed ImGui's input queue DIRECTLY from the touch hooks
+  (`io.AddMousePosEvent`/`AddMouseButtonEvent`). ImGui **event-trickling** (default on)
+  splits a fast down+up tap across two NewFrames so the press is never lost — per-frame
+  sampling of a `g_tdown` flag DID lose it (tap toggles between frames).
+- **Menu-region ownership (no 1-frame lag):** `draw_menu` publishes its window rect each
+  frame; a touch-DOWN inside the rect → the menu "owns" the whole down→move→up sequence
+  (fed to ImGui, NOT passed to the game) so the game UI under the menu doesn't react.
+  Touches outside the menu pass straight through to the game.
+- **`objc_msgSend_stret`@0x378578** (immediately after `objc_msgSend`@0x3783d4; loads isa
+  from r1, r0 = hidden struct-return ptr). Found while debugging touch: CGPoint/CGRect
+  returns use the stret ABI — calling such a method through plain `objc_msgSend` shifts
+  args by one register → crash. Resolved in libmod (`msgSend_stret`) for future
+  CGRect/CGPoint reads (e.g. view bounds); the touch path no longer needs it.
+- **Debug HUD (owner ask):** top-center overlay (`NoDecoration|NoInputs`), toggled by a
+  menu checkbox. Shows **FPS** (`io.Framerate`) + **RAM** (RSS, `/proc/self/statm`) +
+  **CPU%** (`/proc/self/stat` utime+stime delta over CLOCK_MONOTONIC) — all process-level,
+  NO game internals. Refreshed ~2/s. (Verified: "RAM 210 MB", "FPS 60" on device.)
+
+## ✅ RELOCATING INLINE-HOOK + LIVE GRAVITY (2026-06-14)
+- **`inline_hook` upgraded to a prologue-relocating trampoline** (`mod/mod.cpp`). The old
+  hook copied the displaced 8 bytes verbatim → broke on PC-relative prologues. Now it
+  decodes the 2 displaced ARM insns and:
+  - `ldr Rt,[pc,#imm]` (literal load) → reads the link-time constant at install time, puts
+    it in the trampoline's own literal pool, emits `ldr Rt,[pc,#newimm]` to reload it. The
+    in-place `add Rt,pc,Rt` that usually follows runs AFTER the jump-back, so its PC (and
+    thus the reconstructed GOT address) is correct.
+  - `bx/blx Rm` and other PC-INDEPENDENT insns → copied verbatim.
+  - any genuinely PC-relative insn left (b/bl, Rn=pc, Rm=pc) → ABORT (return 0) + LOGE,
+    never silent corruption. **GOTCHA:** `bx lr` (0xe12fff1e) has SBO `1111` in bits[19:16]
+    that look like Rn=pc — must whitelist `bx/blx` `(w & 0x0FFFFFD0)==0x012FFF10` BEFORE the
+    Rn=pc test, else it false-aborts (it did, killing the swap hook the first time).
+  This unlocks hooking ANY ObjC method (most start with `ldr [pc]` ivar/selector loads).
+- **LIVE GRAVITY — WORKING (owner-confirmed).** Key insight: the level's `b2World` is
+  CONSTRUCTED with its gravity, so `setGravity:`@0x64d3a4 is NOT called on a normal level
+  (hooking it directly = 0 calls = no effect — the first failed attempt). Driver = the
+  per-frame physics tick **`-[World step:(ccTime)]`@0x64d510** (same class as `world`
+  @0x64d81c / `gravity`@0x64d3e0 / `setGravity:`). Each frame: read the level's base via
+  the game's own `gravity` getter (b2Vec2 → **stret**), then `[self setGravity:(0, baseY*mult)]`.
+  Base read once per level (detect `[self world]` pointer change). Slider **−30×…+30×**
+  (negative = inverted → bike flies up) + −/+ (0.1 step) + Reset. Confirmed on device:
+  `base gravity (0, -70)`, negative floats the bike, +30× slams it.
+- **LIVE CAMERA ZOOM — WORKING (owner-confirmed), two modes.** `setCameraZoom:`@0x649e3c
+  just stores an ivar (`str r2,[r0,r1]`); it lives on the **GameLayer** (a DIFFERENT class
+  from the physics World — `step:`'s self gives `respondsToSelector:setCameraZoom:`=NO).
+  Driver = **`-[GameLayer draw]`@0x648eec** (per-frame; identified via
+  `respondsToSelector:`). The game writes `cameraZoom` itself each frame for a per-level
+  DYNAMIC zoom (in/out at map sections), so two modes: **Flexible** = read the game's live
+  value, multiply by `g_zoom_mult` (don't compound — detect whether the game changed it vs
+  our own last write; at mult==1 don't touch it so dynamic zoom is untouched); **Locked** =
+  force a constant `g_zoom_mult` each frame (overrides the dynamic zoom). Radio toggle +
+  slider 0.2×…5× + −/+ (0.1) + Reset. (Locking it with a fixed value looked "trippy" =
+  fighting the game's dynamic zoom — hence the two modes.)
+- **Menu polish:** auto-fit was tried but it DISABLES manual resize (owner wanted resize) →
+  reverted to a normal resizable+scrollable window with a tall default. Fine-tune −/+
+  buttons on both sliders. Debug HUD (FPS/RAM/CPU) toggle.
+
+## ✅ RESET PROGRESS + BIKE SPECS + TABS (2026-06-14)
+- **Save layout found** (rooted `adb` exploration): the Apportable save lives in
+  `/data/data/com.miniclip.bikerivals/files/Contents/Resources/` —
+  **`g_<w>_<l>.dat` = per-level GHOST files**, **`data.dat` = progress/medals**,
+  `ConditionState.dat` = achievements, `NSUserDefaults.plist` = settings. The mod runs as
+  the app UID → can delete these with **NO root**.
+- **RESET PROGRESS button** (System tab, 2-tap confirm): `do_reset_progress()` `unlink`s all
+  `g_*.dat` + `data.dat` + `ConditionState.dat`, then `_exit(0)` so the in-memory copy can't
+  re-save over the deletion (user reopens → fresh medals/ghosts). Keeps NSUserDefaults
+  (settings); unlocks survive (native patches, not save data).
+- **BIKE SPEC multipliers** (Bike tab): hook the 5 setters
+  `setSpeedLimit:`@0x66e1cc / `setNitroPerformance:`@0x66e2a4 / `setForceScale:`@0x66e214 /
+  `setBurnoutSpeed:`@0x66e2ec / `setMaxWheelieSpeed:`@0x66e37c (all LDR-PC prologues →
+  relocating hook). Each captures the bike object + its CONFIG base value and applies
+  `base*mult`; live re-apply in `step:`. **Edge-case-safe BY DESIGN** (owner's pizza→regular
+  worry): each bike scales its OWN base at its OWN setup, so there is no stored per-bike
+  state to bleed; switching bikes re-captures the new bike's base. Sliders show
+  `base -> base*mult`, range **x0.1…x30** (no negative), ±0.1 fine-tune + Reset.
+  NOTE: the shown stat is the captured raw spec (physics units), not the shop's 0–N bar
+  count — the bar mapping isn't reversed yet; and the base reflects the LAST-driven bike
+  (shop-selected-but-not-driven bikes need a shop hook). Good enough to compare/tune.
+- **Tabs**: menu reorganized into **Drive** (gravity + zoom) / **Bike** (specs) / **System**
+  (Debug HUD, mod-loader status, Reset Progress) via `BeginTabBar`. Opens expanded
+  (`SetNextWindowCollapsed(false, FirstUseEver)`), resizable+scrollable.
+- **GOTCHA:** the libgame waiter timed out (30s) on a slow launch (Google Play sign-in
+  retries delayed libgame load past 30s → "gave up waiting for libgame", no hooks). Bumped
+  to **120s** (2400×50ms; a sleeping thread costs nothing). libgame was already mapped — it
+  just loaded late.
+
+## NEXT (Phase 6 continued) — owner requests queued
+- **Multiple ghosts** — owner wants several ghosts racing at once. PROMISING: the game
+  already has multi-ghost slots — `ghost1_…ghost4_`, `ghostNode1_…4_`, `ghostSprites_`
+  (plural), `setGhostSprites:`, `recordGhostSprites:`, `hideAllGhosts`, `MiniGhosts`,
+  `GhostRecorder`/`loadGhostFromFile:`/`updateWithRecordedGhost:`. Deep feature (record N
+  runs, load N ghost files, drive N ghost sprites) — prototype after reset-progress.
+- **SHOP STATS vs PHYSICS SPECS (2026-06-14 research).** The shop shows 4 bars:
+  **max speed / acceleration / handling / nitro**. These are bike-PRODUCT properties with
+  their own setters: `setMaxSpeed:`@0x69e918, `setAcceleration:`@0x63f380/0x679db8,
+  `setHandling:`@0x5eeb90, `setTopSpeed:`@0x5eeb00, + `statSprite{Speed,Accel,Handling,Nitro}_`
+  and `updateStatBar:Number:`@0x5e7c4c / `adjustStat:`@0x5ea528 (shop class ~0x5e). They are
+  SEPARATE from the gameplay PHYSICS specs the menu tunes (`speedLimit`/`forceScale`/
+  `nitroPerformance`/`maxWheelieSpeed`/`burnoutSpeed` @ ~0x66e). The menu now LABELS the
+  physics sliders with the shop names (inferred map: Max speed→speedLimit,
+  Acceleration→forceScale, Handling→maxWheelieSpeed, Nitro→nitroPerformance, +Burnout extra)
+  — affects FEEL but does NOT move the shop bars (the product stat is a different field).
+  **NITRO BUG (owner-found + fixed):** `nitroPerformance` also scales the nitro UI sprite,
+  so ×30 inflated it to fill the screen → nitro slider clamped to **×3**.
+  TODO to make bars update + confirm the exact map: hook the product setters / find the
+  product→physics conversion (where setup reads maxSpeed and calls setSpeedLimit:), and read
+  the SHOP-selected bike (not just last-driven).
+- "Save" persists live tunes → mod-config / `mods/` files (root-free) so they survive exit.
 - Integrate the modlib inject into `apply_patches.py` + bundle `libmod.so` in `build.sh`.
 - **CONFIRMED (device, 2026-06-14): levels requested as the BARE filename `1_16.dat`**
   (`<world>_<level>.dat`) via `loadLevelInfo:FileName:`@0x6e25dc (FileName = r3 NSString).
