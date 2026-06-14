@@ -1,0 +1,29 @@
+{
+  "name": "revenant-patcher",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Browser one-click patcher for Bike Rivals 1.5.2 (BYO original APK, patched in-browser).",
+  "scripts": {
+    "sync-manifest": "cp ../patches/manifest.json public/manifest.json",
+    "predev": "cp ../patches/manifest.json public/manifest.json",
+    "prebuild": "cp ../patches/manifest.json public/manifest.json",
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "jszip": "^3.10.1",
+    "node-forge": "^1.4.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/node-forge": "^1.3.14",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.11"
+  }
+}

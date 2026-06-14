@@ -35,6 +35,11 @@ build/keystore/
 *.jks
 
 # ── build artifacts ──────────────────────────────────────────────────────
+# node / vite (the web patcher)
+node_modules/
+web/dist/
+# manifest copy is generated from patches/manifest.json at predev/prebuild
+web/public/manifest.json
 tools/unidbg/target/
 tools/unidbg/natives/
 *.class
@@ -58,3 +63,5 @@ lvl_*.png
 /*.png
 .playwright-mcp/
 mod/imgui/
+wasm/target/
+web/public/*.wasm

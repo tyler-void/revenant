@@ -1,0 +1,17 @@
+[package]
+name = "revenant-wasm"
+version = "0.1.0"
+edition = "2021"
+description = "Rust->WASM core for the Revenant browser patcher (DEX checksum fixup; APK signing next)."
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+sha1 = "0.10"
+
+[profile.release]
+opt-level = "z"
+lto = true
+panic = "abort"
+codegen-units = 1

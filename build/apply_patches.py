@@ -187,6 +187,35 @@ NATIVE_PATCHES = [
 ]
 
 
+# --- PERMISSION CULL (privacy, 2026) -----------------------------------------
+# A 2014 game requests a pile of tracking/PII/ads/IAP/push permissions. Drop the
+# sketchy + unused ones. KEEP the network trio — GameActivity does a connectivity
+# check at startup and throws SecurityException without ACCESS_NETWORK_STATE
+# (device-confirmed) — plus sensors (tilt), vibrate, wake-lock, storage.
+DROP_PERMS = [
+    "android.permission.ACCESS_COARSE_LOCATION",
+    "android.permission.GET_ACCOUNTS",
+    "android.permission.USE_CREDENTIALS",
+    "com.android.vending.BILLING",
+    "com.miniclip.bikerivals.permission.C2D_MESSAGE",
+    "com.google.android.c2dm.permission.RECEIVE",
+]
+
+
+def patch_permissions(root):
+    p = os.path.join(root, MANIFEST)
+    lines = open(p).read().splitlines(keepends=True)
+    out, removed = [], []
+    for ln in lines:
+        if "uses-permission" in ln and any(d in ln for d in DROP_PERMS):
+            removed.append(ln.strip())
+            continue
+        out.append(ln)
+    open(p, "w").write("".join(out))
+    print(f"[perms] dropped {len(removed)} sketchy permissions "
+          "(location/accounts/credentials/billing/push); network+sensors+storage kept")
+
+
 def patch_native(root):
     p = os.path.join(root, SO_REL)
     data = bytearray(open(p, "rb").read())
@@ -207,4 +236,6 @@ if __name__ == "__main__":
         patch_tilt(root)
     if "--no-native" not in sys.argv:
         patch_native(root)
+    if "--no-perms" not in sys.argv:
+        patch_permissions(root)
     print("done")

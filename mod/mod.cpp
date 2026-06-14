@@ -46,6 +46,8 @@ extern "C" {
 #define OFF_SETFORCE   0x66e214 // -[Bike setForceScale:(float)]
 #define OFF_SETBURN    0x66e2ec // -[Bike setBurnoutSpeed:(float)]
 #define OFF_SETWHEELIE 0x66e37c // -[Bike setMaxWheelieSpeed:(float)]
+#define OFF_PROCCOND 0x50e104  // -[ConditionManager processConditionInfo:Achievements:] (info=r2, achs=r3 BOOL)
+#define OFF_CLICKSTATS 0x5a3db0 // -[? clickStats:] — Stats button handler (online; fails offline)
 // app-private save dir (mod runs as the app UID -> rw, no root): ghosts g_*.dat, data.dat
 #define SAVE_DIR "/data/data/com.miniclip.bikerivals/files/Contents/Resources"
 #define MENU_SCALE   3.0f       // ImGui scale for the phone (big, touch-friendly)
@@ -137,10 +139,14 @@ static bool g_menu_open = true;
 // Menu window rect (pixels) is published by draw_menu each frame; the touch hook uses the
 // previous frame's rect to decide ownership synchronously (no 1-frame capture lag).
 static float g_win_x0=0,g_win_y0=0,g_win_x1=0,g_win_y1=0;
+static float g_aw_x0=0,g_aw_y0=0,g_aw_x1=0,g_aw_y1=0;   // achievements window rect
+static bool  g_show_ach = false;         // achievements viewer open (Stats button reroute)
 static bool  g_owned = false;            // current touch sequence began on the menu
 
 static inline bool in_menu(float x,float y){
-    return x>=g_win_x0 && x<=g_win_x1 && y>=g_win_y0 && y<=g_win_y1;
+    if(x>=g_win_x0 && x<=g_win_x1 && y>=g_win_y0 && y<=g_win_y1) return true;
+    if(g_show_ach && x>=g_aw_x0 && x<=g_aw_x1 && y>=g_aw_y0 && y<=g_aw_y1) return true;
+    return false;
 }
 static void hook_mdown(int id_, int x, int y, int d){
     if(imgui_ready && in_menu((float)x,(float)y)){
@@ -299,6 +305,62 @@ static void do_reset_progress(){
     _exit(0);
 }
 
+// ── ACHIEVEMENTS (offline viewer — data layer spike) ─────────────────────────
+// processConditionInfo:Achievements: runs at startup on the ConditionManager (self) with the
+// achievements collection in r3. Capture both, and log each achievement's name(+0x4) /
+// text(+0x8) / unlocked(+0xb) to prove we can read them for an offline (no-GPGS) viewer.
+static void (*orig_proccond)(id,SEL,id,id)=0;
+static void (*orig_clickstats)(id,SEL,id)=0;
+static id  g_condmgr = 0, g_achs = 0;
+#define ACH_MAX 32
+static char g_ach_text[ACH_MAX][160];     // display strings built once (no per-frame ObjC)
+static int  g_ach_count = 0;
+
+static void cstr(id nsstr, char* out, int cap){   // [nsstr UTF8String] -> out (truncated)
+    out[0]=0;
+    if(!nsstr) return;
+    const char* s=(const char*)msgSend(nsstr, sel_utf8);
+    if(!s) return;
+    int j=0; for(; s[j] && j<cap-1; j++) out[j]=s[j]; out[j]=0;
+}
+
+static void hook_proccond(id self, SEL cmd, id info, id achs){
+    // "Achievements:" (achs) is a BOOL flag (1=achievements pass, 0=conditions). The real
+    // data is the ConditionManager ivar activeAchievements_(+0x4), an NSDictionary.
+    g_condmgr = self;
+    orig_proccond(self,cmd,info,achs);
+    id aAch = *(id*)((char*)self + 0x4);
+    if(achs && aAch && g_achs != aAch){      // achievements pass, once per collection
+        g_achs = aAch;
+        SEL s_count=selReg("count"), s_obj=selReg("objectAtIndex:"),
+            s_resp=selReg("respondsToSelector:"), s_vals=selReg("allValues");
+        // dict -> allValues array; or already an array
+        id list = aAch;
+        if(!((bool(*)(id,SEL,SEL))msgSend)(aAch,s_resp,s_obj))
+            list = ((bool(*)(id,SEL,SEL))msgSend)(aAch,s_resp,s_vals)
+                 ? ((id(*)(id,SEL))msgSend)(aAch,s_vals) : 0;
+        int n = list ? (int)(intptr_t)((id(*)(id,SEL))msgSend)(list,s_count) : 0;
+        if(n>ACH_MAX) n=ACH_MAX;
+        SEL s_desc=selReg("description");
+        for(int i=0;i<n;i++){
+            id a=((id(*)(id,SEL,int))msgSend)(list,s_obj,i);   // [description] is safe on any object
+            id d=a?((id(*)(id,SEL))msgSend)(a,s_desc):0;
+            cstr(d, g_ach_text[i], sizeof g_ach_text[i]);
+            if(!g_ach_text[i][0]) snprintf(g_ach_text[i],sizeof g_ach_text[i],"achievement %d",i);
+            if(i<4) LOGI("  ach[%d]=%s", i, g_ach_text[i]);
+        }
+        g_ach_count=n;
+        LOGI("ACH list built: %d", n);
+    }
+}
+
+// Stats button -> open our OFFLINE achievements viewer instead of the online stats call
+// (which shows "Unable to view stats" offline). Don't call orig (skips the failing request).
+static void hook_clickstats(id self, SEL cmd, id sender){
+    (void)self;(void)cmd;(void)sender;
+    g_show_ach = true;
+}
+
 // ── process telemetry (no game internals): RAM RSS + process CPU% ─────────────
 static int   g_ram_mb  = 0;
 static float g_cpu_pct  = 0.0f;
@@ -418,6 +480,22 @@ static void draw_menu(){
     ImGui::End();
 }
 
+// Offline achievements viewer — opened by the rerouted Stats button (g_show_ach).
+static void draw_achievements(){
+    ImGuiIO& io = ImGui::GetIO();
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x*0.5f, io.DisplaySize.y*0.5f),
+                            ImGuiCond_Appearing, ImVec2(0.5f,0.5f));
+    ImGui::SetNextWindowSize(ImVec2(640,560), ImGuiCond_FirstUseEver);
+    ImGui::Begin("Achievements (offline)", &g_show_ach);   // [X] sets g_show_ach=false
+    ImGui::Text("Achievements: %d", g_ach_count);
+    ImGui::Separator();
+    if(g_ach_count==0) ImGui::TextDisabled("None loaded yet — open from a screen that loads them.");
+    else for(int i=0;i<g_ach_count;i++) ImGui::TextWrapped("%s", g_ach_text[i]);
+    ImVec2 wp=ImGui::GetWindowPos(), ws=ImGui::GetWindowSize();
+    g_aw_x0=wp.x; g_aw_y0=wp.y; g_aw_x1=wp.x+ws.x; g_aw_y1=wp.y+ws.y;
+    ImGui::End();
+}
+
 // Hook cocos2d swapBuffers: scene is drawn + GL context current; draw ImGui on top,
 // then call the original (which presents). ARM, in libgame — no Thumb hazard.
 static void hook_swap(id self, SEL cmd){
@@ -443,6 +521,7 @@ static void hook_swap(id self, SEL cmd){
     ImGui::NewFrame();
     static int sc = 0; if((sc++ % 30) == 0) update_stats();   // refresh telemetry ~2/s
     if(g_menu_open) draw_menu();
+    if(g_show_ach)  draw_achievements();
     if(g_hud_on)    draw_hud();
     ImGui::Render();
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
@@ -479,6 +558,10 @@ static void install_hooks(){
     orig_sburn   =(void(*)(id,SEL,float))inline_hook((void*)(g_base+OFF_SETBURN),   (void*)hook_sburn);
     orig_swheelie=(void(*)(id,SEL,float))inline_hook((void*)(g_base+OFF_SETWHEELIE),(void*)hook_swheelie);
     LOGI("bike-spec hooks armed (speed=%p)", (void*)orig_sspeed);
+
+    orig_proccond=(void(*)(id,SEL,id,id))inline_hook((void*)(g_base+OFF_PROCCOND),(void*)hook_proccond);
+    orig_clickstats=(void(*)(id,SEL,id))inline_hook((void*)(g_base+OFF_CLICKSTATS),(void*)hook_clickstats);
+    LOGI("achievements hook armed (proccond=%p clickstats=%p)", (void*)orig_proccond, (void*)orig_clickstats);
 }
 
 static int find_cb(struct dl_phdr_info* info, size_t sz, void* d){

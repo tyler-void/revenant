@@ -1,0 +1,47 @@
+{
+  "schema": "revenant-patch-manifest/v1",
+  "game": {
+    "package": "com.miniclip.bikerivals",
+    "label": "Bike Rivals",
+    "version": "1.5.2"
+  },
+  "legal": "BYO-original. This manifest ships METHODS/OFFSETS ONLY and patches the user's OWN, legally-obtained APK in their browser (in RAM). No copyrighted game bytes are distributed.",
+
+  "native": {
+    "comment": "In-place ARM byte-patches on lib/armeabi-v7a/libgame.so. Each patch is verified against `expect` (first bytes at `off`) before writing, so a different/wrong libgame.so aborts loudly. RET_YES = mov r0,#1;bx lr  RET_NO = mov r0,#0;bx lr.",
+    "file": "lib/armeabi-v7a/libgame.so",
+    "patches": [
+      { "name": "isWorldUnlocked:",          "off": "0x6b0df0", "expect": "f0492de914b08de2", "patch": "0100a0e31eff2fe1", "group": "unlock", "desc": "All story worlds unlocked" },
+      { "name": "isUniverseUnlocked:",        "off": "0x6a5094", "expect": "f04b2de90060a0e1", "patch": "0100a0e31eff2fe1", "group": "unlock", "desc": "All universes/DLC worlds unlocked" },
+      { "name": "bike.unlocked",              "off": "0x5eea94", "expect": "14109fe514209fe5", "patch": "0100a0e31eff2fe1", "group": "unlock", "desc": "Bikes ownable (SELECT not GET-IT-NOW)" },
+      { "name": "isBikeUnlocked:ArrayFile:",  "off": "0x6a3f24", "expect": "f04f2de91cb08de2", "patch": "0100a0e31eff2fe1", "group": "unlock", "desc": "Bike display: unlocked" },
+      { "name": "bike.purchased",             "off": "0x5eed14", "expect": "14109fe514209fe5", "patch": "0100a0e31eff2fe1", "group": "unlock", "desc": "Bike display: purchased stamp" },
+      { "name": "bike.revealed",              "off": "0x50d93c", "expect": "14109fe514209fe5", "patch": "0100a0e31eff2fe1", "group": "unlock", "desc": "Bike display: revealed" },
+      { "name": "bike.isRevealed",            "off": "0x5edeb0", "expect": "f0492de914b08de2", "patch": "0100a0e31eff2fe1", "group": "unlock", "desc": "Bike display: isRevealed" },
+      { "name": "bike.locked#1",              "off": "0x6b6124", "expect": "14109fe514209fe5", "patch": "0000a0e31eff2fe1", "group": "unlock", "desc": "Bike not locked (#1)" },
+      { "name": "bike.locked#2",              "off": "0x6b77e4", "expect": "14109fe514209fe5", "patch": "0000a0e31eff2fe1", "group": "unlock", "desc": "Bike not locked (#2)" },
+      { "name": "useFuel:.noop",              "off": "0x6b1ca8", "expect": "30109fe5",         "patch": "1eff2fe1",         "group": "fuel",   "desc": "Fuel: useFuel: no-op (bx lr)" },
+      { "name": "consumeBars:.no-spend",      "off": "0x6ab4e4", "expect": "7a00001a",         "patch": "7a0000ea",         "group": "fuel",   "desc": "Fuel: consumeBars: never spends (bne->b)" },
+      { "name": "gasBarsLeft->Total",         "off": "0x6b4e24", "expect": "14109fe5",         "patch": "100000ea",         "group": "fuel",   "desc": "Fuel gauge always reads full" },
+      { "name": "consumableCount:.=99",       "off": "0x6b1cf0", "expect": "010052e30300001a", "patch": "6300a0e31eff2fe1", "group": "nitro",  "desc": "Nitro/helmets count always 99" },
+      { "name": "useConsumable:.no-spend",    "off": "0x6b1dc0", "expect": "0010a0e10000a0e3", "patch": "0100a0e31eff2fe1", "group": "nitro",  "desc": "Nitro/helmets never spend" }
+    ]
+  },
+
+  "dex": {
+    "comment": "DEX byte-patch infra works (in-place same-size patch + Rust→WASM Adler32/SHA-1 recompute, see wasm/). BUT the MINIMAL tilt fix (force-register @0x43fc46 38000b00->00000000 + neuter unregister @0x43fca4 6300b943->0e000000) was DEVICE-TESTED and CRASHES: forcing register makes the game's original onSensorChanged forward to the NATIVE onSensorChanged(FFFJ) before libgame.so binds it -> UnsatisfiedLinkError. The proper fix needs a try/catch around the native call (what the apktool full-fix does) = a DEX code-item REWRITE (new exception handler, size change) — NOT a same-size byte-patch. That's the next Rust→WASM job (dex code-item editing). Patches disabled until then; the CLI build (build/apply_patches.py) keeps the working full tilt fix.",
+    "file": "classes.dex",
+    "recomputeChecksum": true,
+    "patches": []
+  },
+
+  "androidManifest": {
+    "comment": "Binary AXML edit: add HIGH_SAMPLING_RATE_SENSORS for the tilt fix on some hardware. TODO: test whether it is DROPPABLE (tilt may work without it), since editing binary AXML in-browser is non-trivial.",
+    "addPermissions": ["android.permission.HIGH_SAMPLING_RATE_SENSORS"]
+  },
+
+  "addFiles": {
+    "comment": "Optional power feature (NOT needed to 'just play'): the libmod.so ImGui mod menu + its System.loadLibrary('mod') inject into GameActivity.<clinit>. Deferred for the browser patcher.",
+    "files": []
+  }
+}
