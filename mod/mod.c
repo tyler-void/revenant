@@ -20,7 +20,7 @@
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "RVMOD", __VA_ARGS__)
 
 // libgame static vaddrs (load base added at runtime)
-#define OFF_LOADLEVEL 0x6e25dc   // -[... loadLevelInfo:FileName:]
+#define OFF_READER    0x64ec3c   // +[NSData DataWithContentsOfFile:Password:] (path,pw)->NSData
 #define OFF_MSGSEND   0x3783d4   // objc_msgSend
 #define OFF_SELREG    0x3775e0   // sel_registerName
 #define OFF_GETCLASS  0x37295c   // objc_getClass
@@ -36,24 +36,26 @@ static SEL   (*selReg)(const char*) = 0;
 static Class (*getClass)(const char*) = 0;
 static SEL sel_utf8 = 0, sel_strWithUTF = 0;
 static Class cls_NSString = 0;
-static void (*orig_loadLevel)(id, SEL, id, id) = 0;
+static id (*orig_reader)(id, SEL, id, const char*) = 0;
 
-// MOD-LOADER: if mods/<filename> exists, swap the FileName arg to that absolute path
-// so the game loads our file instead of the bundled one. Then call the original.
-static void hook_loadLevel(id self, SEL cmd, id info, id filename) {
-    const char* name = filename ? (const char*)msgSend(filename, sel_utf8) : 0;
-    if (name) {
+// THE MOD-LOADER: every encrypted asset (levels, configs) is read through
+// +[NSData DataWithContentsOfFile:(path)Password:(pw)] @0x64ec3c. We take the path's
+// basename; if mods/<basename> exists, swap the path to the absolute mods file so the
+// game reads+decrypts OUR file. Drop e.g. mods/1_24.dat to replace level 24.
+static id hook_reader(id self, SEL cmd, id file, const char* pw) {
+    const char* p = file ? (const char*)msgSend(file, sel_utf8) : 0;
+    if (p && *p) {
+        const char* slash = strrchr(p, '/');
+        const char* base  = slash ? slash + 1 : p;
         char modpath[600];
-        snprintf(modpath, sizeof(modpath), "%s/%s", MODS_DIR, name);
+        snprintf(modpath, sizeof(modpath), "%s/%s", MODS_DIR, base);
         if (access(modpath, R_OK) == 0) {
-            LOGI("[MOD] override hit: %s -> %s", name, modpath);
+            LOGI("[MOD] %s -> %s", base, modpath);
             id nsmod = ((id(*)(Class, SEL, const char*))msgSend)(cls_NSString, sel_strWithUTF, modpath);
-            orig_loadLevel(self, cmd, info, nsmod);
-            return;
+            return orig_reader(self, cmd, nsmod, pw);
         }
-        LOGI("[C hook] loadLevelInfo FileName = %s (no mod override)", name);
     }
-    orig_loadLevel(self, cmd, info, filename);
+    return orig_reader(self, cmd, file, pw);
 }
 
 // --- minimal ARM32 inline hook (relocates the first 8 prologue bytes) ---
@@ -90,9 +92,9 @@ static void install_hooks(void) {
     sel_utf8       = selReg("UTF8String");
     sel_strWithUTF = selReg("stringWithUTF8String:");
     cls_NSString   = getClass("NSString");
-    orig_loadLevel = (void(*)(id,SEL,id,id))inline_hook((void*)(g_base + OFF_LOADLEVEL),
-                                                         (void*)hook_loadLevel);
-    LOGI("hooks installed (orig=%p, NSString=%p, mods=%s)", (void*)orig_loadLevel,
+    orig_reader = (id(*)(id,SEL,id,const char*))inline_hook((void*)(g_base + OFF_READER),
+                                                            (void*)hook_reader);
+    LOGI("mod-loader installed (reader=%p NSString=%p mods=%s)", (void*)orig_reader,
          (void*)cls_NSString, MODS_DIR);
 }
 
