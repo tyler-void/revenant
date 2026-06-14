@@ -232,6 +232,7 @@ static float g_base_gx = 0.0f, g_base_gy = 0.0f;
 static float g_grav_mult = 1.0f;     // -30..30 (negative = inverted, 1.0 = normal)
 static float g_zoom_mult = 1.0f;     // 0.2..5
 static int   g_zoom_mode = 0;        // 0 = flexible (dynamic x mult), 1 = locked (fixed)
+static int   g_dismount = 0;         // crash chaos: 0=off, 1=ragdoll launch, 2=dismember (break joints)
 static int   g_step_calls = 0;
 static float g_cur_speed = 0.0f;     // bike's current speed (Box2D m/s) — chassis (heroTorso) body
 static bool  g_show_speed = false;   // SPD readout — opt-in (default OFF). The run-timer freeze is
@@ -554,9 +555,17 @@ static void draw_menu(){
             ImGui::Checkbox("Debug HUD (top of screen)", &g_hud_on);
             ImGui::Checkbox("Show speed in HUD", &g_show_speed);
             ImGui::Spacing();
-            ImGui::TextColored(ImVec4(1.0f,0.6f,0.3f,1.0f), "Note: the in-race timer is UNRELIABLE while");
-            ImGui::TextColored(ImVec4(1.0f,0.6f,0.3f,1.0f), "this mod is active (it can freeze - cause");
-            ImGui::TextColored(ImVec4(1.0f,0.6f,0.3f,1.0f), "unknown). Use the no-mod build for timed runs.");
+            ImGui::TextColored(ImVec4(1.0f,0.6f,0.3f,1.0f), "Note: GRAVITY/BIKE-SPEC features skew the");
+            ImGui::TextColored(ImVec4(1.0f,0.6f,0.3f,1.0f), "in-race timer/ghost while ON. Speed is");
+            ImGui::TextColored(ImVec4(1.0f,0.6f,0.3f,1.0f), "timer-safe; race clean for real times.");
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Text("Crash chaos (Dismount):");
+            ImGui::RadioButton("Off##dis", &g_dismount, 0); ImGui::SameLine();
+            ImGui::RadioButton("Ragdoll launch", &g_dismount, 1); ImGui::SameLine();
+            ImGui::RadioButton("Dismember", &g_dismount, 2);
+            ImGui::TextDisabled("On crash: Ragdoll = launch the rider;");
+            ImGui::TextDisabled("Dismember = blow the limbs apart.");
             ImGui::Spacing();
             ImGui::TextDisabled("Mod-loader: ON");
             ImGui::Separator();
@@ -614,6 +623,75 @@ static void update_speed(){
     if(s >= 0.0f) g_cur_speed = s;                            // else keep last good reading
 }
 
+// ── DISMOUNT (crash chaos) ───────────────────────────────────────────────────
+// On the rider's death (-[? killSpinningAnimation]@OFF_DEATH — the death-spin trigger): Tier 1 (ragdoll
+// launch) writes a big upward velocity + spin onto the torso b2Body (reached via [bike heroTorso] ->
+// +0xf4, same path the speed read uses). Tier 2 (dismember = break the limb joints) is the next
+// milestone. Setting velocity is a plain field write (safe even mid-callback); joint destroy is NOT.
+static void fling_ragdoll(){
+    if(!g_bike_self || !sel_herotorso) return;
+    id torso = ((id(*)(id,SEL))msgSend)(g_bike_self, sel_herotorso);
+    void* body = torso ? *(void**)((char*)torso + OFF_WHEEL_BODY_IVAR) : 0;
+    if(!body){ LOGI("RVDIS: no torso body to fling"); return; }
+    float vx = *(float*)((char*)body + 0x44);
+    int s = (g_step_calls & 1) ? 1 : -1;                 // vary spin direction per crash
+    *(float*)((char*)body + 0x44) = vx*2.5f + s*40.0f;   // m_linearVelocity.x — amplify + sideways kick
+    *(float*)((char*)body + 0x48) = 160.0f;              // m_linearVelocity.y — launch straight up
+    *(float*)((char*)body + 0x4c) = s*35.0f;             // m_angularVelocity — spin
+    LOGI("RVDIS: ragdoll launch (body=%p was vx=%.1f)", body, vx);
+}
+// Tier 2 — DISMEMBER: walk the torso body's Box2D joint-edge list (b2Body.m_jointList @0x70; each
+// b2JointEdge = {other@0, joint@4, prev@8, next@12}) to reach every connected limb body (head/hands/
+// feet, + the bike attach), and slam each with a big divergent velocity + spin so they blow apart.
+// Force-limited joints pop (true detach); rigid ones make the ragdoll explode into a flail. No
+// b2World::DestroyJoint / no freeing -> far lower crash risk than tearing joints out of the world.
+static void dismember(){
+    if(!g_bike_self || !sel_herotorso) return;
+    id torso = ((id(*)(id,SEL))msgSend)(g_bike_self, sel_herotorso);
+    void* tbody = torso ? *(void**)((char*)torso + OFF_WHEEL_BODY_IVAR) : 0;
+    if(!tbody){ LOGI("RVDIS: no torso body to dismember"); return; }
+    static const float DX[4]={ 1.0f,-1.0f, 0.7f,-0.7f };   // divergent outward directions per limb
+    static const float DY[4]={ 0.7f, 0.8f, 1.2f, 1.0f };
+    void* edge = *(void**)((char*)tbody + 0x70);           // b2Body.m_jointList (b2JointEdge*)
+    int n=0;
+    while(edge && n<16){
+        void* other = *(void**)((char*)edge + 0x00);       // b2JointEdge.other = connected limb body
+        void* next  = *(void**)((char*)edge + 0x0c);       // b2JointEdge.next
+        if(other && other!=tbody){
+            int j=n&3;
+            *(float*)((char*)other+0x44) = 150.0f*DX[j];           // m_linearVelocity.x — outward
+            *(float*)((char*)other+0x48) = 90.0f + 90.0f*DY[j];    // m_linearVelocity.y — up + spread
+            *(float*)((char*)other+0x4c) = (n&1)? 60.0f : -60.0f;  // m_angularVelocity — spin
+        }
+        edge = next; n++;
+    }
+    *(float*)((char*)tbody+0x48) = 150.0f;                  // launch the torso too
+    *(float*)((char*)tbody+0x4c) = 30.0f;
+    LOGI("RVDIS: dismember — flung %d connected bodies", n);
+}
+// Detect death by POLLING the rider's state getters each frame from the overlay (timer-safe). The
+// death code sets kill_/dead_/exploded_ DIRECTLY (it does NOT call the setters — hooking setKill: never
+// fired), so we read the live ivar via its getter instead. Logs which flag flips (death type) and
+// flings once on the alive(0) -> dead(1) transition.
+static SEL sel_kill=0, sel_dead=0, sel_exploded=0;
+static int g_dstate=-1;
+static int rd_bool(id o, SEL s){
+    if(!s || !((bool(*)(id,SEL,SEL))msgSend)(o, sel_responds, s)) return 0;
+    return ((int(*)(id,SEL))msgSend)(o, s) & 0xff;
+}
+static void poll_death(){
+    if(!g_bike_self) return;
+    int k=rd_bool(g_bike_self,sel_kill), de=rd_bool(g_bike_self,sel_dead), ex=rd_bool(g_bike_self,sel_exploded);
+    int st = k|de|ex;
+    if(st != g_dstate){
+        LOGI("RVDIS: state kill=%d dead=%d exploded=%d", k, de, ex);
+        if(st && g_dstate==0 && g_dismount){                   // alive -> dead: trigger once
+            if(g_dismount==2) dismember(); else fling_ragdoll();
+        }
+        g_dstate = st;
+    }
+}
+
 static void hook_swap(id self, SEL cmd){
     if(!imgui_ready){
         IMGUI_CHECKVERSION();
@@ -632,11 +710,27 @@ static void hook_swap(id self, SEL cmd){
     glGetIntegerv(GL_VIEWPORT, vp);
     ImGuiIO& io = ImGui::GetIO();
     io.DisplaySize = ImVec2(vp[2]>0?(float)vp[2]:1280.0f, vp[3]>0?(float)vp[3]:720.0f);
-    io.DeltaTime = 1.0f/60.0f;
+    // real per-frame time so the HUD's FPS readout is truthful (was hardcoded 1/60 -> always showed 60,
+    // which hid the real rate). Clamped to a sane range so a stall can't blow up ImGui's timers.
+    { static struct timespec lt={0,0}; struct timespec nt; clock_gettime(CLOCK_MONOTONIC,&nt);
+      float rdt = lt.tv_sec ? (float)((nt.tv_sec-lt.tv_sec)+(nt.tv_nsec-lt.tv_nsec)/1e9) : 1.0f/60.0f;
+      lt = nt;
+      if(rdt < 1.0f/300.0f) rdt = 1.0f/300.0f; else if(rdt > 1.0f/15.0f) rdt = 1.0f/15.0f;
+      io.DeltaTime = rdt; }
     ImGui_ImplOpenGL3_NewFrame();
     ImGui::NewFrame();
     static int sc = 0; if((sc++ % 30) == 0) update_stats();   // refresh telemetry ~2/s
-    update_speed();                                            // speed HUD via the timer-safe overlay path
+    // Only touch the bike object when the physics step ran THIS frame — i.e. we're in an active level.
+    // After a level ends the bike is deallocated but the overlay keeps running; dispatching on the stale
+    // pointer is a use-after-free (the crash on level finish). g_step_calls advances only while the game
+    // is stepping, so a change since the last swap means we're in-level and the bike is alive.
+    static int last_swap_sc = -1;
+    bool in_level = (g_step_calls != last_swap_sc);
+    last_swap_sc = g_step_calls;
+    if(in_level){
+        update_speed();                                        // speed HUD (timer-safe overlay path)
+        if(g_dismount) poll_death();                           // dismount: detect crash death -> fling
+    }
     if(g_menu_open) draw_menu();
     if(g_show_ach)  draw_achievements();
     if(g_hud_on)    draw_hud();
@@ -681,6 +775,9 @@ static void install_hooks(){
     orig_proccond=(void(*)(id,SEL,id,id))inline_hook((void*)(g_base+OFF_PROCCOND),(void*)hook_proccond);
     orig_clickstats=(void(*)(id,SEL,id))inline_hook((void*)(g_base+OFF_CLICKSTATS),(void*)hook_clickstats);
     LOGI("achievements hook armed (proccond=%p clickstats=%p)", (void*)orig_proccond, (void*)orig_clickstats);
+
+    sel_kill=selReg("kill"); sel_dead=selReg("dead"); sel_exploded=selReg("exploded");
+    LOGI("dismount: polling death state (kill/dead/exploded getters)");
 }
 
 static int find_cb(struct dl_phdr_info* info, size_t sz, void* d){

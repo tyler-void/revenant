@@ -173,6 +173,33 @@ over-spine** model — "playable by construction," not by luck:
 - **Procgen technique** — see the difficulty-curve / solvability research (feeds
   `levelgen.py`).
 
+## Ghost system — record + render (2026-06-15, libgame.so RE)
+
+How the racing ghost works, and why it rendered garbled when `gameTime_` was corrupted
+(the mod-menu step-hook bug — see [modmenu.md](modmenu.md)).
+
+- **Record** (during a run, while `ghostRecording_`): a `GhostRecorder`
+  (`createGhostRecorder`@0x6253c4 → `ghostRecorder_`, `getGhostRecorder`@0x6e2818).
+  `recordGhostSprites:`@0x61b5f0 samples the rider's part transforms over time into
+  `ghostData_` — a **time-indexed keyframe stream** (`setGhostData:`/`getExtraGhostData:`).
+  Cap: **"Ghosts over 60 seconds are not available"** (60s max). Saved per level as
+  `g_<w>_<l>.dat` (the ghost save files).
+- **Load**: `GhostFromFile:`@0x616eb0 / `GhostFromData:`@0x616e1c → a `GhostEntity`/
+  `SpriteGhost` (`ghostEntity_`, `ghostSprite_`).
+- **Render / playback (per frame)**: **`updateWithRecordedGhost:`@0x61a20c** looks up the
+  recorded keyframe at the **current run time = `gameTime_`** (the same clock the on-screen
+  timer uses), interpolates, and sets the ghost sprite transform → the ghost replays in sync
+  with the live run. `clearOldGhost`@0x61a640 tears it down on restart.
+- **Multi-ghost (4 slots)**: `ghost1_..4_` / `ghostNode1_..4_` / `clickGhost1_..4_` /
+  `setGhostSprites:`@0x66a54c / `MiniGhosts.mm`. The owner's "several ghosts at once" is
+  feasible: load N ghost files → N `GhostEntity`s → drive each via `updateWithRecordedGhost:`.
+- **Why a bad `gameTime_` garbles it (confirmed):** playback is **time-indexed by `gameTime_`**.
+  The mod-menu step-hook bug corrupted `gameTime_` (froze/crawled), so the keyframe lookup was
+  wrong/stuck → the ghost drew at the wrong recorded frame (scrambled body, wrong route) AND
+  finish times came out sub-1s. **One root cause (`gameTime_`), two symptoms (run timer + ghost).**
+  Fixed by the idle fast-path; the ghost only re-garbles while a step-hook feature (gravity/
+  bike-specs) is engaged (re-skews `gameTime_`). Speed HUD + dismount don't touch the step → ghost OK.
+
 ## Sources / tools
 
 unidbg (JDK17), capstone, Ghidra (Java scripts; PyGhidra broken), apktool,
