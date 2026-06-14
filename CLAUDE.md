@@ -24,25 +24,35 @@ deeper human/community-facing record. Keep both current.
 
 ## 🎯 STANDING DIRECTIVES — do NOT lose these on context compaction
 
-Long-running owner asks that keep getting dropped when context is summarized. They
-persist here so any session picks them up. Detailed findings/plan live in
-**[docs/procgen.md](docs/procgen.md)** (corpus analysis + generator design +
-World-5 registration) — read it before touching the generator or World 5.
+Long-running owner asks that keep getting dropped on summarization. **OVERARCHING GOAL
+(2026-06-14): bring this game to OTHERS to play ASAP — make people happy, no community
+needed yet.** The game is genuinely lost (pulled from stores 2018, Flash/Kongregate
+dead ~2020); our patched build is all-unlocked + fuel-fixed + TILT-FIXED-for-modern-
+Android + offline — a great "just play" experience. Legal model stays BYO-original
+(ship methods only; distributing the patched APK is the 🔴 line).
 
-1. **Data-driven generator from ALL ~140 levels.** Decode every level (worlds 1–4),
-   analyze how the game actually builds terrain (segment density, slope distribution,
-   spline vs polygon, fill/edge textures) and what makes each level *challenging*
-   (obstacle taxonomy + placement + difficulty progression per world). Feed those
-   real distributions back into `tools/level-editor/levelgen.py`. Corpus re-decode
-   runbook: `docs/steps.md` → "Decode the full level corpus".
-2. **Web + roguelike research.** Keep pulling in external procgen technique (smooth
-   spline/noise terrain, difficulty pacing, solvability, obstacle telegraphing,
-   roguelike variety/encounter-budget); record in `docs/procgen.md`.
-3. **Terrain quality bar (owner feedback):** NO "lazy straight lines", NO over-steep
-   slopes. Terrain must read as hand-authored — smooth rolling ground, rideable grades.
-4. **World 5 = additive custom-level world** hosting the enhanced generator. RE how
-   levels register (`WorldDefinition.plist`, `GameConfig_T%d.dat`, level-count + unlock
-   checks); add world 5 WITHOUT touching Halloween/Christmas (separate worlds, confirmed).
+**ACTIVE — full speed (in order):**
+- **Phase 6 — in-game LIVE mod menu (ImGui)** + debug HUD. Live-tune bike specs
+  (`setSpeedLimit:`/`setNitroPerformance:`/`setForceScale:`/`setMaxWheelieSpeed:`/
+  `setBurnoutSpeed:`), bike name (`setName:`), **gravity** (Box2D `b2World.m_gravity`),
+  physics (restitution/friction/density). Appearance-swap among existing looks OK;
+  custom art = mod-loader later. Debug HUD = top-of-screen telemetry (rotation `currentRotation_`,
+  speed `getSpeed`/`linearVelocity_`, current bike `currentBikeIndex_`/`getBikeDisplayName:`,
+  air time `airTime_`, flips, FPS via cocos2d `_FPSLabel`/`displayStats`, RAM/CPU).
+  Game is GLES2/EGL (`libGLESv2.so`) → ImGui injects via eglSwapBuffers hook + touch
+  routing (the big new build); native-cocos2d UI is the fallback. Plan/findings:
+  **[docs/modmenu.md](docs/modmenu.md)**.
+- **Phase 7 — offline achievements** (IDs/conditions already extracted from ConditionInfo).
+- **Phase 8 — UX/UI: browser one-click patcher + codebase revamp + distribute.** Static
+  GitHub Pages app, BYO-original, patches the user's own APK IN-BROWSER (RAM, JSZip +
+  in-place offset patches from a shared `patches/manifest.json` + in-browser v1 signing).
+  Hard part = the tilt fix as an in-place DEX byte-patch (no apktool) + testing if the
+  manifest permission is droppable. Revamp = one declarative patch manifest feeding both
+  the CLI and the browser. (8 doesn't depend on 6/7 — could ship first for players ASAP.)
+
+**PAUSED (not abandoned):** World 5 + procedural generation — see
+**[docs/procgen.md](docs/procgen.md)** (deep RE in progress: dynamic-trace toolkit works,
+comingSoon gate located, needs more trace rounds).
 
 ## 🔴 SECURITY / LEGAL CONSTRAINTS — never violate
 
