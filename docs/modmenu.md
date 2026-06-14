@@ -73,3 +73,28 @@ Re-skinning/re-speccing the 21 EXISTING bike slots works + persists (mod-loader)
   gravity slider = the same hook reading a saved/live multiplier.
 - Accessors located for the menu data layer: `getBikeBody`@0x66d95c…, `getSpeed`@0x66cca8,
   `heroTorso`@0x67ab98, spec setters `setSpeedLimit:`@0x66e1cc etc., `world`@0x64d81c.
+
+## MOD-LOADER recon (2026-06-14) — path resolution + the open question
+- Assets resolve under **`assets/unpack/`** (binary references it + `getResourcePath`/
+  `bundlePath`/`/Contents/Resources/`); level paths built from format strings
+  `%d_%d.dat` / `%@/%@.dat` / `%d/%d_%d.dat`.
+- **`CCFileUtils fullPathForFilename:`@0x4d78b0 is NOT the resolver in practice** — hook
+  installed + confirmed in the binary, but it NEVER fired at startup/menu. The game
+  resolves via a different path (the `resolutionType:` variant @0x4d78e8 directly,
+  `fullPathFromRelativePath:`, or direct construction). So the clean "prepend mods/ to
+  `_searchPath`" approach is unconfirmed until we know the game consults CCFileUtils.
+- cocos2d DOES have the search-path API (`setSearchPath:`@0x4d8b1c, `_searchPath` ivar,
+  `getPathForFilename:withResourceDirectory:withSearchPath:`) — still the preferred
+  mod-loader IF consulted.
+- The encrypted reader **`+[NSData DataWithContentsOfFile:Password:]`@0x64ea98 fires on
+  LEVEL LOAD** (proven via the RVLEN keylog). A read-trace hook is installed to log the
+  exact `.dat` path (`[path UTF8String]`).
+- `screencap` = black (GL surface) → can't navigate blind; the level-load trace needs the
+  USER to load a level (same as the World-5 trace).
+- **DEVICE BUILD (installed, combined, launches clean):** gravity ÷4 (cave 0xaf745c) +
+  read-trace (cave 0xaf7500, tag **RVRD**). Built via `build/patch_gravity_spike.py` +
+  `build/patch_pathtrace.py` re-targeted to 0x64ea98/r2/cave2.
+- **NEXT (needs user):** load any level → `adb logcat | grep RVRD` → the exact `.dat` path.
+  Then design the mod-loader: (a) redirect the reader's path arg to a `mods/` override if
+  one exists, or (b) if CCFileUtils is consulted, prepend `mods/` to `_searchPath`.
+- Trace tooling: `build/patch_pathtrace.py` (re-targetable resolver/reader trace).
