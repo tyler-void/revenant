@@ -23,18 +23,36 @@
 #define OFF_LOADLEVEL 0x6e25dc   // -[... loadLevelInfo:FileName:]
 #define OFF_MSGSEND   0x3783d4   // objc_msgSend
 #define OFF_SELREG    0x3775e0   // sel_registerName
+#define OFF_GETCLASS  0x37295c   // objc_getClass
 
-typedef void* id; typedef void* SEL;
+// where mod overrides live (app-writable, no root). Drop e.g. mods/1_24.dat to override.
+#define MODS_DIR "/sdcard/Android/data/com.miniclip.bikerivals/files/mods"
+
+#include <stdio.h>
+typedef void* id; typedef void* SEL; typedef void* Class;
 static uintptr_t g_base = 0;
-static id  (*msgSend)(id, SEL, ...) = 0;
-static SEL (*selReg)(const char*) = 0;
-static SEL sel_utf8 = 0;
+static id    (*msgSend)(id, SEL, ...) = 0;
+static SEL   (*selReg)(const char*) = 0;
+static Class (*getClass)(const char*) = 0;
+static SEL sel_utf8 = 0, sel_strWithUTF = 0;
+static Class cls_NSString = 0;
 static void (*orig_loadLevel)(id, SEL, id, id) = 0;
 
-// Our hook: log the FileName arg from C, then call the original.
+// MOD-LOADER: if mods/<filename> exists, swap the FileName arg to that absolute path
+// so the game loads our file instead of the bundled one. Then call the original.
 static void hook_loadLevel(id self, SEL cmd, id info, id filename) {
     const char* name = filename ? (const char*)msgSend(filename, sel_utf8) : 0;
-    LOGI("[C hook] loadLevelInfo FileName = %s", name ? name : "(null)");
+    if (name) {
+        char modpath[600];
+        snprintf(modpath, sizeof(modpath), "%s/%s", MODS_DIR, name);
+        if (access(modpath, R_OK) == 0) {
+            LOGI("[MOD] override hit: %s -> %s", name, modpath);
+            id nsmod = ((id(*)(Class, SEL, const char*))msgSend)(cls_NSString, sel_strWithUTF, modpath);
+            orig_loadLevel(self, cmd, info, nsmod);
+            return;
+        }
+        LOGI("[C hook] loadLevelInfo FileName = %s (no mod override)", name);
+    }
     orig_loadLevel(self, cmd, info, filename);
 }
 
@@ -66,12 +84,16 @@ static void* inline_hook(void* target, void* repl) {
 }
 
 static void install_hooks(void) {
-    msgSend = (void*)(g_base + OFF_MSGSEND);
-    selReg  = (void*)(g_base + OFF_SELREG);
-    sel_utf8 = selReg("UTF8String");
+    msgSend  = (void*)(g_base + OFF_MSGSEND);
+    selReg   = (void*)(g_base + OFF_SELREG);
+    getClass = (void*)(g_base + OFF_GETCLASS);
+    sel_utf8       = selReg("UTF8String");
+    sel_strWithUTF = selReg("stringWithUTF8String:");
+    cls_NSString   = getClass("NSString");
     orig_loadLevel = (void(*)(id,SEL,id,id))inline_hook((void*)(g_base + OFF_LOADLEVEL),
                                                          (void*)hook_loadLevel);
-    LOGI("hooks installed (loadLevelInfo orig=%p)", (void*)orig_loadLevel);
+    LOGI("hooks installed (orig=%p, NSString=%p, mods=%s)", (void*)orig_loadLevel,
+         (void*)cls_NSString, MODS_DIR);
 }
 
 static int find_cb(struct dl_phdr_info* info, size_t sz, void* d) {
