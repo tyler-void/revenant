@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Build libmod.so (the injected native mod lib) for armeabi-v7a using the Android NDK.
-# Auto-detects the NDK; override with ANDROID_NDK=/path. Output: build/work/lib/armeabi-v7a/libmod.so
+# Build libmod.so (mod-loader + ImGui overlay) for armeabi-v7a with the Android NDK.
+# Auto-detects the NDK; override with ANDROID_NDK=. Output: build/work/lib/armeabi-v7a/libmod.so
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -10,16 +10,21 @@ if [ -z "$NDK" ]; then
     [ -d "$d" ] && NDK="$d" && break
   done
 fi
-[ -n "$NDK" ] && [ -d "$NDK" ] || { echo "ERROR: Android NDK not found. Install it (sudo pacman -S android-ndk) or set ANDROID_NDK=."; exit 1; }
-echo "==> NDK: $NDK"
+[ -n "$NDK" ] && [ -d "$NDK" ] || { echo "ERROR: Android NDK not found (sudo pacman -S android-ndk) or set ANDROID_NDK="; exit 1; }
+CXX="$(ls "$NDK"/toolchains/llvm/prebuilt/*/bin/armv7a-linux-androideabi21-clang++ 2>/dev/null | sort -V | head -1)"
+[ -n "$CXX" ] || { echo "ERROR: armv7a clang++ not found under $NDK"; exit 1; }
 
-CC="$(ls "$NDK"/toolchains/llvm/prebuilt/*/bin/armv7a-linux-androideabi*-clang 2>/dev/null | sort -V | head -1)"
-[ -n "$CC" ] || { echo "ERROR: armv7a clang not found under $NDK"; exit 1; }
-echo "==> CC: $CC"
-
+IMGUI=mod/imgui
+SRC="mod/mod.cpp $IMGUI/imgui.cpp $IMGUI/imgui_draw.cpp $IMGUI/imgui_tables.cpp $IMGUI/imgui_widgets.cpp $IMGUI/backends/imgui_impl_opengl3.cpp"
 OUT="build/work/lib/armeabi-v7a/libmod.so"
 mkdir -p "$(dirname "$OUT")"
-"$CC" -shared -fPIC -O2 -fvisibility=hidden -Wall \
-  -o "$OUT" mod/mod.c -llog
+echo "==> CXX: $CXX"
+"$CXX" -shared -fPIC -O2 -std=c++17 -fvisibility=hidden -Wall -Wno-unused-parameter \
+  -static-libstdc++ \
+  -DIMGUI_IMPL_OPENGL_ES2 -DIMGUI_DISABLE_OBSOLETE_FUNCTIONS \
+  -I"$IMGUI" -I"$IMGUI/backends" \
+  -o "$OUT" $SRC \
+  -lGLESv2 -lEGL -llog -ldl
+NDKRE="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+echo "    NEEDED:" $("$NDKRE" -d "$OUT" 2>/dev/null | grep -i NEEDED | grep -oE '\[[^]]+\]' | tr '\n' ' ')
 echo "==> built $OUT ($(stat -c%s "$OUT") bytes)"
-"$NDK"/toolchains/llvm/prebuilt/*/bin/llvm-readelf -d "$OUT" 2>/dev/null | grep -i soname || true
