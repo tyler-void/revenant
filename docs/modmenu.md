@@ -98,6 +98,39 @@ Re-skinning/re-speccing the 21 EXISTING bike slots works + persists (mod-loader)
   Then design the mod-loader: (a) redirect the reader's path arg to a `mods/` override if
   one exists, or (b) if CCFileUtils is consulted, prepend `mods/` to `_searchPath`.
 - Trace tooling: `build/patch_pathtrace.py` / `build/patch_lvltrace.py`.
+
+## ✅ MOD-LOADER DONE (2026-06-14) — native libmod.so + reader redirect
+Switched from hand-assembled ARM stubs to a real **NDK-built native lib** (the toolchain
+that also unlocks the ImGui menu). Pipeline, all device-verified:
+- **Build:** `mod/build.sh` (auto-detects `/opt/android-ndk`, armv7a clang) → `libmod.so`.
+- **Inject:** `build/patch_modlib.py` adds `System.loadLibrary("mod")` to
+  `GameActivity.<clinit>` (try/catch, guaranteed-early — `firstRun()`/`loadNativeLibrary`
+  is NOT per-launch; `<clinit>` is). libmod loads BEFORE libgame, so it polls
+  `dl_iterate_phdr` until libgame is mapped, then hooks.
+- **Inline hook:** minimal ARM32 prologue-relocating hook (`mod/mod.c` `inline_hook`):
+  writes `LDR PC,[PC,#-4]` + abs addr over the target's first 8 bytes (prologue must be
+  position-independent), trampoline = orig 8 bytes + jump to target+8. Calls the game's
+  own `objc_msgSend`/`sel_registerName`/`objc_getClass` from C.
+- **THE MOD-LOADER:** hook `+[NSData DataWithContentsOfFile:Password:]@0x64ec3c`
+  (path,pw)→NSData — every encrypted asset (levels, configs) reads through it. Take the
+  path's basename; if `<mods>/<basename>` exists, swap the path to that absolute file →
+  the game reads+decrypts OUR file. `MODS_DIR =
+  /sdcard/Android/data/com.miniclip.bikerivals/files/mods` (app-writable, **no root**).
+- **VERIFIED:** dropped a generated `mods/1_24.dat`, loaded career level 24 →
+  `[MOD] 1_24.dat -> .../mods/1_24.dat` → the game rendered our generated level and
+  played, no crash, no APK re-patch. Mod files = the editor's encrypted `.dat` (same
+  format); name them `<world>_<level>.dat`. Same mechanism covers bikes/configs.
+- DEAD END that wasted a round: `loadLevelInfo:FileName:`@0x6e25dc only processes the
+  Info object's medal-time floats — it IGNORES FileName. The geometry is read via 0x64ec3c.
+- **Autonomous testing rig:** `adb shell screenrecord` captures the GL surface (unlike
+  `screencap` = black) → `ffmpeg` 1 frame → readable; `adb shell input tap/swipe` in
+  landscape 2340×1080 coords. Lets the agent see + drive the game without the user.
+
+## NEXT (Phase 6 continued)
+- ImGui menu (now feasible with the NDK + libmod): hook `eglSwapBuffers` to draw, route
+  touch, expose live bike-spec/gravity sliders (gravity via the proven `setGravity:`
+  path) + the debug HUD; "Save" writes a mod-config / `mods/` files (root-free persist).
+- Integrate the modlib inject into `apply_patches.py` + bundle `libmod.so` in `build.sh`.
 - **CONFIRMED (device, 2026-06-14): levels requested as the BARE filename `1_16.dat`**
   (`<world>_<level>.dat`) via `loadLevelInfo:FileName:`@0x6e25dc (FileName = r3 NSString).
   No `unpack/` prefix, no subdir — the resource layer prepends `assets/unpack/`. So a
