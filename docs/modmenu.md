@@ -42,6 +42,34 @@
 3. ImGui menu shell (inject + eglSwapBuffers hook + touch) — or native fallback.
 4. Wire the live-tune fields (specs/gravity/name) + the HUD toggle.
 
+## Persistence model (NO ROOT needed — owner concern, resolved)
+The mod runs IN the game process → it can write the app's OWN storage with no root on
+any Android (sandbox). Two lanes, both root-free, both NO APK re-patch:
+- **Settings** (gravity multiplier, toggles, live-tune values) → mod writes a mod-config
+  (JSON/plist) to the app data dir; a startup/level hook re-applies it. e.g. the
+  `setGravity:` hook reads a SAVED multiplier instead of the spike's hardcoded ÷4.
+- **Custom assets** (bike plists, levels, appearance) → the **MOD-LOADER**: hook
+  `CCFileUtils::fullPathForFilename:` so a file in a writable `mods/` folder
+  (`getExternalStoragePath`, app-writable, no root) overrides the APK asset. The menu's
+  "Save" writes overrides there; players share mods by dropping files in. This is the
+  linchpin for persistent custom content — elevate it alongside Phase 6.
+ImGui live writes alone are SESSION-ONLY (RAM, lost on exit) — persistence comes from
+the two lanes above, not from the live edit.
+
+## DEFERRED — the "register a NEW content slot" problem (held, per owner)
+Both are the same unsolved hard RE (registering brand-new content, native + config):
+- **New shop bike entry** (22nd+ bike): roster lives in encrypted `ProductList.dat`/
+  `Shop.dat` (config key, have it) + native shop code. Count/registration unsolved.
+- **World 5** (new world): `_comingSoon` gate + registration — paused (docs/procgen.md).
+Re-skinning/re-speccing the 21 EXISTING bike slots works + persists (mod-loader) — so
+"custom bikes" is covered; brand-new shop rows are the held part.
+
 ## Spike findings
-*(appended as the data-layer RE proceeds — see the "applyGravity:" + bike/world accessor
-investigation.)*
+- **Gravity is the Box2D world gravity.** `setGravity:`@0x64d3a4 writes the b2Vec2 to
+  `b2World.m_gravity` at `world+0x19240` (x) / `+0x19244` (y); gravity args arrive in
+  r2(x)/r3(y) as float bits. DEMO SHIPPED: `build/patch_gravity_spike.py` hooks
+  `0x64d3bc` and does `sub r3,r3,#0x01000000` (÷4 gravity.y via exponent decrement,
+  VFP-free) → bike floats. Device-installed. ⇒ live physics writes PROVEN; the menu's
+  gravity slider = the same hook reading a saved/live multiplier.
+- Accessors located for the menu data layer: `getBikeBody`@0x66d95c…, `getSpeed`@0x66cca8,
+  `heroTorso`@0x67ab98, spec setters `setSpeedLimit:`@0x66e1cc etc., `world`@0x64d81c.
