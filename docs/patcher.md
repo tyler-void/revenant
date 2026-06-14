@@ -87,7 +87,12 @@ the browser app. Sections:
 ## Remaining milestones
 1. ✅ ~~TEST INSTALL on a modern device~~ — done: browser-built APK installs on Android 13, boots,
    and tilt-steers in-game (only "Motion"/sensor access granted).
-2. **GitHub Pages deploy** (Actions build of `web/` + `wasm/` → Pages).
+2. ✅ **GitHub Pages deploy** — workflow added: `.github/workflows/deploy-pages.yml` builds the
+   Rust→WASM core + the Vite app and deploys `web/dist` to Pages on push to `main`. **One-time
+   setup:** repo Settings → Pages → Source = "GitHub Actions". Serves at
+   `https://<owner>.github.io/<repo>/` (vite `base` defaults to `/revenant/`; override via the
+   `VITE_BASE` repo variable if the repo is named differently). Verified `bun run build` emits a
+   complete `dist/` (index + manifest.json + logo.png + revenant_wasm.wasm + assets).
 3. **Refactor `apply_patches.py`** to read `patches/manifest.json` (one source for CLI + web).
 4. (Optional) **APK v2/v3 signing in `wasm/`** (Rust `rsa`/`sha2` + the APK Signing Block) — v1
    already installs on Android 13, so this is hardening, not required.

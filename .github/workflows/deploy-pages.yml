@@ -1,0 +1,59 @@
+# Build the browser one-click patcher (web/) and deploy it to GitHub Pages.
+# One-time setup: repo Settings → Pages → Source = "GitHub Actions".
+# The site serves at https://<owner>.github.io/<repo>/  (vite base defaults to /revenant/;
+# override with the VITE_BASE env below if the repo isn't named "revenant").
+name: Deploy patcher to Pages
+
+on:
+  push:
+    branches: [main]
+    paths: ['web/**', 'wasm/**', 'patches/manifest.json', '.github/workflows/deploy-pages.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# one deploy at a time; let an in-progress run finish
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 1) Rust → WASM core (dex_fixup + dex_tilt_rewrite), copied into web/public
+      - name: Build Rust→WASM
+        run: |
+          rustup target add wasm32-unknown-unknown
+          cargo build --release --manifest-path wasm/Cargo.toml --target wasm32-unknown-unknown
+          cp wasm/target/wasm32-unknown-unknown/release/revenant_wasm.wasm web/public/revenant_wasm.wasm
+
+      # 2) Web app (Bun). `prebuild` copies patches/manifest.json into public/.
+      - uses: oven-sh/setup-bun@v2
+      - name: Build web
+        working-directory: web
+        env:
+          VITE_BASE: ${{ vars.VITE_BASE || '/revenant/' }}
+        run: |
+          bun install --frozen-lockfile
+          bun run build
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
