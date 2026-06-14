@@ -188,14 +188,16 @@ static void hook_mup(int id_, int x, int y, int d){
 static void (*orig_step)(id,SEL,float) = 0;
 static void (*orig_draw)(id,SEL) = 0;
 static SEL   sel_world=0, sel_gravity=0, sel_setgrav=0;
-static SEL   sel_setzoom=0, sel_camzoom=0, sel_responds=0;
+static SEL   sel_setzoom=0, sel_camzoom=0, sel_responds=0, sel_getspeed=0;
 static id    g_game_self = 0, g_world_last = 0;
 static id    g_cam_self = 0, g_cam_last = 0;
+static id    g_bike_self = 0;        // captured bike (BikeCommon1); set by the spec-setter hooks
 static float g_base_gx = 0.0f, g_base_gy = 0.0f;
 static float g_grav_mult = 1.0f;     // -30..30 (negative = inverted, 1.0 = normal)
 static float g_zoom_mult = 1.0f;     // 0.2..5
 static int   g_zoom_mode = 0;        // 0 = flexible (dynamic x mult), 1 = locked (fixed)
 static int   g_step_calls = 0;
+static float g_cur_speed = 0.0f;     // bike's current speed (Box2D m/s) via -[BikeCommon1 getSpeed]
 static bool  g_grav_ok = false, g_can_zoom = false;
 struct V2 { float x, y; };
 
@@ -211,12 +213,18 @@ static void hook_step(id self, SEL cmd, float dt){
         V2 g = {0,0}; msgSend_stret(&g, self, sel_gravity);       // [self gravity] -> b2Vec2
         g_base_gx = g.x; g_base_gy = g.y; g_grav_ok = true;
         g_cam_self = 0; g_cam_last = 0; g_can_zoom = false;       // force camera re-capture
+        g_cur_speed = 0.0f;                                       // reset HUD speed on level load
         LOGI("level world=%p base gravity (%.3f, %.3f)", world, g.x, g.y);
     }
     if(g_grav_ok)
         ((void(*)(id,SEL,float,float))msgSend)(self, sel_setgrav, g_base_gx, g_base_gy*g_grav_mult);
     apply_specs();              // live bike-spec multipliers on the current bike
     orig_step(self, cmd, dt);
+    // current speed for the debug HUD — read in the step path (same context apply_specs safely
+    // uses g_bike_self), so draw_hud never derefs a stale bike between levels. [bike getSpeed]
+    // dynamic-dispatches to -[BikeCommon1 getSpeed] (back-wheel linear-velocity magnitude, m/s).
+    if(g_bike_self && sel_getspeed)
+        g_cur_speed = ((float(*)(id,SEL))msgSend)(g_bike_self, sel_getspeed);
 }
 
 // -[GameLayer draw] — per-frame; this class owns setCameraZoom:/cameraZoom (the physics
@@ -262,7 +270,7 @@ static void hook_draw(id self, SEL cmd){
 static void (*orig_sspeed)(id,SEL,float)=0, (*orig_snitro)(id,SEL,float)=0;
 static void (*orig_sforce)(id,SEL,float)=0, (*orig_sburn)(id,SEL,float)=0;
 static void (*orig_swheelie)(id,SEL,float)=0;
-static id    g_bike_self = 0;
+// g_bike_self is declared up with the other game-object pointers (the step hook reads its speed)
 static float g_bspeed=0, g_bnitro=0, g_bforce=0, g_bburn=0, g_bwheelie=0;          // captured base
 static float g_mspeed=1, g_mnitro=1, g_mforce=1, g_mburn=1, g_mwheelie=1;          // user multipliers
 static bool  g_spec_have = false;
@@ -398,7 +406,7 @@ static void draw_hud(){
     ImGui::Begin("##rvhud", nullptr,
         ImGuiWindowFlags_NoDecoration|ImGuiWindowFlags_NoInputs|ImGuiWindowFlags_AlwaysAutoResize|
         ImGuiWindowFlags_NoSavedSettings|ImGuiWindowFlags_NoNav|ImGuiWindowFlags_NoFocusOnAppearing);
-    ImGui::Text("FPS %.0f   |   RAM %d MB   |   CPU %.0f%%", io.Framerate, g_ram_mb, g_cpu_pct);
+    ImGui::Text("FPS %.0f   |   RAM %d MB   |   CPU %.0f%%   |   SPD %.1f", io.Framerate, g_ram_mb, g_cpu_pct, g_cur_speed);
     ImGui::End();
 }
 
@@ -537,7 +545,7 @@ static void install_hooks(){
     sel_utf8=selReg("UTF8String"); sel_strWithUTF=selReg("stringWithUTF8String:");
     sel_world=selReg("world"); sel_gravity=selReg("gravity"); sel_setgrav=selReg("setGravity:");
     sel_setzoom=selReg("setCameraZoom:"); sel_camzoom=selReg("cameraZoom");
-    sel_responds=selReg("respondsToSelector:");
+    sel_responds=selReg("respondsToSelector:"); sel_getspeed=selReg("getSpeed");
     cls_NSString=getClass("NSString");
     orig_reader=(id(*)(id,SEL,id,const char*))inline_hook((void*)(g_base+OFF_READER),(void*)hook_reader);
     LOGI("mod-loader installed (reader=%p)", (void*)orig_reader);

@@ -18,10 +18,17 @@
   bike looks is feasible; fully custom art = mod-loader/custom-assets (later).
 
 ## Debug HUD telemetry (read-only, top of screen — don't clutter the drive)
-- rotation `currentRotation_`/`displayRotation_` · speed `getSpeed`/`linearVelocity_`/
-  `headLinearVelocity_` · current bike `currentBikeIndex_`/`getBikeDisplayName:` ·
-  air time `airTime_` · flips (`BACKFLIP! x%d`/`FRONTFLIP!`) · FPS via cocos2d
-  `_FPSLabel`/`displayStats` · system RAM/CPU (`/proc/self/statm`, `/proc/stat`).
+- **IMPLEMENTED** (`draw_hud`): `FPS | RAM MB | CPU% | SPD`. FPS via ImGui `io.Framerate`;
+  RAM/CPU via `/proc/self/statm` + `/proc/self/stat`. **SPD = `-[BikeCommon1 getSpeed]`**
+  (the real override, IMP 0x67a278 — the parent `Bike` getSpeed @0x66cca8 is a 0-stub; ALWAYS
+  dispatch dynamically via `objc_msgSend(g_bike_self, selReg("getSpeed"))`, returns `float`,
+  Box2D m/s = back-wheel `[body] m_linearVelocity` magnitude). Read inside `hook_step` (where
+  `apply_specs` already safely uses `g_bike_self`) and stored in `g_cur_speed`, so `draw_hud`
+  never derefs a stale bike between levels; reset to 0 on level load. Units are raw Box2D m/s
+  (no clean PTM_RATIO in the binary — calibrate a display multiplier empirically if wanted).
+- Other candidates (not yet shown): rotation `currentRotation_`/`displayRotation_`, the velocity
+  *vector* (back-wheel `m_linearVelocity` x/y at body+0x44/+0x48), current bike
+  `currentBikeIndex_`/`getBikeDisplayName:`, air time `airTime_`, flips.
 
 ## Architecture
 - **UI:** ImGui is the right tool for live sliders. Game is **GLES2/EGL**
