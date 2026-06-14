@@ -22,11 +22,14 @@ Revenant — Bike Rivals 1.5.2 smali patcher.
 
 Usage:  python3 apply_patches.py <decode_dir> [--no-tilt]
 """
-import sys, os
+import sys, os, json
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REF_ACC = os.path.join(HERE, "..", "ref", "re-stuffs", "bike-rivals", "smali",
                        "com", "miniclip", "input", "MCAccelerometer.smali")
+# Shared declarative manifest (single source for CLI + browser patcher). Native byte-patches and
+# the dropped-permissions list come from here so the two paths can never drift apart.
+PATCH_MANIFEST = json.load(open(os.path.join(HERE, "..", "patches", "manifest.json")))
 
 NON_CONSUMABLE_SKUS = (
     [f"com.miniclip.bikerivalsbike{i}" for i in range(1, 12)] +
@@ -128,78 +131,28 @@ def patch_tilt(root):
 
 
 # --- NATIVE UNLOCK (libgame.so) ---------------------------------------------
-# The real bike/world ownership is gated by native Objective-C checks in
-# libgame.so, NOT by the encrypted save or NSUserDefaults (those only hold
-# "notification-shown" flags). We force the unlock-check methods to return YES.
-# Offsets located via ObjC method-metadata scan; (offset, expected original 8
-# bytes) pairs are asserted before patching so a different libgame.so aborts
-# loudly instead of corrupting. Patch = `mov r0,#1 ; bx lr` (ARM).
-SO_REL = os.path.join("lib", "armeabi-v7a", "libgame.so")
-RET_YES = "0100a0e31eff2fe1"   # mov r0,#1 ; bx lr
-RET_NO  = "0000a0e31eff2fe1"   # mov r0,#0 ; bx lr
-# Only CONFIRMED-EFFECTIVE patches are kept. The bike *ride/select* gate (the
-# carousel's SELECT-vs-GET-IT-NOW decision) was NOT cracked: setter-force,
-# selectCurrentBike-NOP, buyUnlock-NOP, and disableSelectButton-redirect all had
-# no visible effect (the store reads owned-state through an objc_msgSend path that
-# blind static patching can't reach, and no ARM exec env exists to trace it). See
-# docs/BIKE-UNLOCK-STATUS.md. WORLDS + TILT + bike-display are confirmed working.
+# The real bike/world ownership is gated by native Objective-C checks in libgame.so, NOT by the
+# encrypted save or NSUserDefaults. We force the unlock-check methods to return YES (mov r0,#1;bx lr)
+# plus fuel/nitro patches. Each patch is asserted against its `expect` bytes before writing, so a
+# different/non-1.5.2 libgame.so aborts loudly instead of corrupting.
+#
+# These offsets/bytes now come from the SHARED patches/manifest.json `native` section (single source
+# for this CLI and the in-browser patcher — they can't drift). The manifest's per-patch `group`/`desc`
+# document each; the CLI applies them all. (Bike ride/select GET-IT-NOW gate was NOT cracked — see
+# docs/BIKE-UNLOCK-STATUS.md; worlds + tilt + bike-display + fuel + nitro are confirmed working.)
+SO_REL = os.path.join(*PATCH_MANIFEST["native"]["file"].split("/"))
 NATIVE_PATCHES = [
-    # name,                       offset,   expected original bytes, patch bytes
-    # --- WORLDS: all story worlds + DLCs (CONFIRMED by user) ---
-    ("isWorldUnlocked:",          0x6b0df0, "f0492de914b08de2", RET_YES),
-    ("isUniverseUnlocked:",       0x6a5094, "f04b2de90060a0e1", RET_YES),
-    # --- BIKE GATE (unidbg-confirmed): the store's owned-check message-dispatches the
-    # `unlocked` selector -> getter @0x5eea94 (reads BikeInfo.unlocked ivar @0xb). This is
-    # THE one that flips SELECT-vs-GET-IT-NOW; forcing it YES should make bikes ownable.
-    # (The earlier `purchased` getter reads a different ivar @0xc the gate ignores.) ---
-    ("bike.unlocked",             0x5eea94, "14109fe514209fe5", RET_YES),
-    # --- supporting bike-display patches (cosmetic: full-color + PURCHASED stamp) ---
-    ("isBikeUnlocked:ArrayFile:", 0x6a3f24, "f04f2de91cb08de2", RET_YES),
-    ("bike.purchased",            0x5eed14, "14109fe514209fe5", RET_YES),
-    ("bike.revealed",             0x50d93c, "14109fe514209fe5", RET_YES),
-    ("bike.isRevealed",           0x5edeb0, "f0492de914b08de2", RET_YES),
-    ("bike.locked#1",             0x6b6124, "14109fe514209fe5", RET_NO),
-    ("bike.locked#2",             0x6b77e4, "14109fe514209fe5", RET_NO),
-    # --- UNLIMITED FUEL ---
-    # There are TWO consume paths, and the first patch alone was insufficient:
-    #   useFuel: @0x6b1ca8       — `gasBarsLeft -= amount; bx lr` (a leaf; MP/other path).
-    #   consumeBars: @0x6ab4b0   — the SINGLEPLAYER per-attempt consume. THIS is the one
-    #                              that actually drained the tank in play (user-reported:
-    #                              gauge showed full but it "dried" and demanded a refill).
-    # 1) NOP useFuel: to `bx lr` so its decrement never runs.
-    ("useFuel:.noop",             0x6b1ca8, "30109fe5", "1eff2fe1"),  # bx lr
-    # 2) consumeBars: does gasBarsLeft -= count (@0x6ab668) and returns success/failure;
-    #    the caller shows OutOfGasPopup on failure. At entry it tests a byte flag (the
-    #    game's OWN pause/unlimited path): `bne 0x6ab6d4` jumps to an exit that returns
-    #    SUCCESS (r0=1) WITHOUT decrementing. Force that branch unconditional (cond NE->AL,
-    #    0x1a->0xea) so the consume is always skipped-and-succeeds — no spend, no popup,
-    #    even at 0 bars. This is the surgical fix the gauge redirect couldn't reach.
-    ("consumeBars:.no-spend",     0x6ab4e4, "7a00001a", "7a0000ea"),  # bne->b skip-consume
-    # 3) Belt-and-suspenders gauge: redirect gasBarsLeft getter @0x6b4e24 -> `b gasBarsTotal
-    #    @0x6b4e6c`, so the reported fuel ALWAYS equals the full tank (gauge shows full) even
-    #    if the stored ivar is momentarily low. off=0x6b4e6c-0x6b4e24-8=0x40 -> imm 0x10.
-    ("gasBarsLeft->Total",        0x6b4e24, "14109fe5", "100000ea"),  # b gasBarsTotal
-    # --- UNLIMITED NITRO + HELMETS (generic consumable manager; type1=nitro, type2=helmet):
-    #   consumableCount: -> always 99 (HUD/store/"do I have any" always satisfied)
-    #   useConsumable:   -> always return YES without decrementing (effect fires, count never drops)
-    ("consumableCount:.=99",      0x6b1cf0, "010052e30300001a", "6300a0e31eff2fe1"),  # mov r0,#0x63;bx lr
-    ("useConsumable:.no-spend",   0x6b1dc0, "0010a0e10000a0e3", "0100a0e31eff2fe1"),  # mov r0,#1;bx lr
+    (p["name"], int(p["off"], 16), p["expect"], p["patch"])
+    for p in PATCH_MANIFEST["native"]["patches"]
 ]
 
 
 # --- PERMISSION CULL (privacy, 2026) -----------------------------------------
-# A 2014 game requests a pile of tracking/PII/ads/IAP/push permissions. Drop the
-# sketchy + unused ones. KEEP the network trio — GameActivity does a connectivity
-# check at startup and throws SecurityException without ACCESS_NETWORK_STATE
-# (device-confirmed) — plus sensors (tilt), vibrate, wake-lock, storage.
-DROP_PERMS = [
-    "android.permission.ACCESS_COARSE_LOCATION",
-    "android.permission.GET_ACCOUNTS",
-    "android.permission.USE_CREDENTIALS",
-    "com.android.vending.BILLING",
-    "com.miniclip.bikerivals.permission.C2D_MESSAGE",
-    "com.google.android.c2dm.permission.RECEIVE",
-]
+# A 2014 game requests a pile of tracking/PII/ads/IAP/push permissions. Drop the sketchy + unused
+# ones (same list the in-browser patcher uses — from the shared manifest's androidManifest section).
+# KEEP the network trio — GameActivity does a startup connectivity check and throws SecurityException
+# without ACCESS_NETWORK_STATE (device-confirmed) — plus sensors (tilt), vibrate, wake-lock, storage.
+DROP_PERMS = PATCH_MANIFEST["androidManifest"]["dropPermissions"]
 
 
 def patch_permissions(root):
