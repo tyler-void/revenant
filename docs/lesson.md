@@ -179,3 +179,14 @@
   is wrong; read the realized offset from the `_OBJC_IVAR_$_…` variable at runtime (`*(g_base+var)`).
 - **Frida is unstable on 32-bit/thumb Apportable and trips anti-tamper** — the in-process NDK
   `libmod` (inline hooks + ImGui) is the right instrument here, not Frida.
+- **Don't do per-frame work inside the physics-step hook — read game state from the OVERLAY hook.**
+  (The run-timer "freeze" — RESOLVED 2026-06-15.) Running ANY body in `-[World step:]` each frame
+  (even a read like `[self world]` or a chassis-velocity `msgSend`) corrupted the game's `gameTime_`,
+  which froze/crawled the in-race timer AND garbled ghost replay (the ghost interpolates on `gameTime_`
+  → sub-1s times + wrong route, same root cause). It was NOT anti-tamper: the `dt` handed to `step:`
+  was a perfect real-time 1/60 (ratio≈1.0 — *measured* via a probe, which is what finally killed the
+  anti-tamper theory). The earlier "gate the writes" fix failed because it still ran the step body
+  every frame. Two-part fix: (1) **idle fast-path** — `hook_step` returns immediately unless a feature
+  is actually engaged (`step_active()`); (2) **move read-only HUD work (speed) to the swap/overlay
+  hook**, which is timer-safe. Rule: the physics step is sacred — run it only when the user is actively
+  modifying physics (gravity/specs); everything read-only belongs in the overlay.

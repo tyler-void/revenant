@@ -54,16 +54,17 @@ the rest are WIP.)
   injected, ImGui overlay (swapBuffers hook) + touch, tabbed menu (Drive/Bike/System),
   live **gravity** (−30×…+30×), **camera zoom** (flexible/locked), **bike specs**
   (max speed/accel/handling/nitro[capped]/burnout, per-bike-safe), **debug HUD** (FPS/RAM/CPU +
-  opt-in **speed** via the back-wheel b2Body), **Reset Progress** (deletes ghosts+medals).
-  ⚠️ **OPEN/UNRESOLVED (2026-06-14): with `libmod` active the in-race level timer FREEZES at 0.00**
-  on normal single-player levels (everything else — physics, menu, HUD — works). Bisected hard via a
-  live **runtime-toggle harness** (`rvdebug.txt` + `build/bisect_modhooks.sh`, no rebuild per step):
-  overlay-only counts; running the game-logic hook bodies freezes it; but **no single culprit was
-  consistently isolated** (near-identical configs gave opposite results). Leaderboard anti-tamper is
-  *plausible but UNPROVEN* — do NOT claim it as fact. Safe-default gating (specs/gravity write only
-  when mult≠1.0×; mod-loader off; speed opt-in) is kept but **does NOT fix it**. Treat the mod menu
-  as a **free-play tool (timer unreliable)**; the distributed browser build (no mod menu) is fine.
-  Paused per owner. Full honest record: **[docs/modmenu.md](docs/modmenu.md)**.
+  opt-in **speed** = chassis `heroTorso` b2Body velocity, read in the overlay hook), **Reset Progress**.
+  ✅ **RUN-TIMER FREEZE FIXED (2026-06-15) + ghost fixed.** Root cause (proven by live-bisect, NOT
+  theory): the **per-frame step-hook BODY** corrupted `gameTime_` — NOT anti-tamper, NOT the spec/
+  gravity writes (the `dt` handed to `step:` is a perfect real-time 1/60, ratio≈1.0). The old "gate the
+  writes" never worked because it still ran `[self world]` + `apply_specs()` EVERY frame. Fix:
+  `hook_step` **idle fast-path** (`step_active()` → do nothing unless a feature is engaged) + the
+  **speed read moved to the overlay (swap) hook** (timer-safe) so the HUD never runs the step body.
+  Now timer + ghost + speed all work together (the ghost shares `gameTime_`, so it was garbled by the
+  same bug → sub-1s times + wrong route). **Remaining trade-off:** only GRAVITY/BIKE-SPEC features run
+  the step body, so engaging those skews the timer/ghost while on (race clean, or experiment — per
+  slider). Full record: **[docs/modmenu.md](docs/modmenu.md)**.
 - **Phase 3 — level editor** (editor+encode done; WYSIWYG render fidelity imperfect).
 - **Phase 4 — mod-loader** done (drop `mods/<w>_<l>.dat`, no root); World-5 slot pending.
   NOTE: its decrypt-path hook was a *suspect* in the Phase-6 timer freeze, so it's now OFF by default.

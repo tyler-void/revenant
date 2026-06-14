@@ -4,10 +4,54 @@
 > bike specs / name / gravity / physics, plus a top-of-screen debug HUD. Read before
 > touching the menu/HUD work.
 
-## ⚠️ OPEN / UNRESOLVED: the mod menu freezes the level run timer
+## ✅ RESOLVED (2026-06-15): run-timer freeze fixed for normal play (step-hook idle fast-path)
 
-**Status (2026-06-14): NOT solved. Paused, documented honestly. Do not trust earlier "anti-tamper,
-fixed by gating" claims — the gated build STILL freezes the timer.**
+**Status (2026-06-15): FIXED for normal play.** The in-race timer now counts normally as long as no
+step-hook menu feature is engaged. **Root cause (proven by live-bisect): the per-frame step-hook BODY
+breaks the timer — NOT the spec/gravity writes.** At default settings the old build still ran
+`[self world]` + `apply_specs()` EVERY frame (only the *writes* were gated), which is exactly why the
+earlier "gate the writes" attempt never fixed it. The fix: `hook_step` now takes an **idle fast-path**
+— if no feature is engaged (`step_active()` false) it calls the original step and returns WITHOUT
+touching the game. Device-confirmed: with everything off the timer counts normally (1.0, 2.0, 3.0…).
+
+The bisect that nailed it (live `rvdebug.txt`, no rebuilds): all game hooks OFF → timer normal;
+`step=1` alone → timer broke; and toggling the speed read flipped it between *frozen* (speed off) and
+*crawling* (speed on) — that timing-sensitivity is why the 2026-06-14 bisect looked "inconsistent."
+
+**Speed HUD now works WITH a clean timer + correct ghost (2026-06-15, device-confirmed).** The speed
+read was moved OUT of the physics step into the **overlay (swap) hook** — the same timer-safe path the
+menu/HUD already use — and `g_show_speed` was removed from `step_active()`. So turning on the speed HUD
+no longer runs the step body: timer counts normally, SPD shows live, ghost replays correctly, all at
+once. This also explained the **ghost bug**: the run timer and ghost playback both read `gameTime_`, so
+the step body corrupting `gameTime_` produced sub-1s finish times AND a garbled ghost route — one root
+cause, both fixed together. (Speed via `[bike heroTorso]` chassis body; back-wheel fallback.)
+
+**Remaining trade-off (a slow timer, NOT a freeze):** only the GRAVITY and BIKE-SPEC features must run
+inside the physics step, so engaging those (mult ≠ 1) re-runs the step body and skews the timer/ghost
+while on — still running, not frozen. Race on a clean timer, or experiment with live physics (timer
+unreliable); your choice, per slider. Zoom lives in the draw hook (its timer effect is untested);
+speed + overlay + touch are all timer-safe.
+
+**Earlier status (2026-06-14, SUPERSEDED): NOT solved — the gated build STILL froze the timer.**
+
+**UPDATE (2026-06-15) — reframed: it's a SLOW timer, NOT a freeze, and NOT anti-tamper.**
+Two device-instrumented findings this session:
+- **Speed HUD FIXED.** The readout now uses the CHASSIS (`heroTorso`) body `m_linearVelocity`
+  instead of the back wheel (which spins/slips and read 0 when its realized ivar wasn't resolved —
+  the cause of the old `spd 0.0`). On-device `RVSPD` log: steady `live` values, 0.3 m/s idle →
+  ~168 m/s flat-out, tracking the bike. Read path: `[bike heroTorso]` → PhysicsObject `+0xf4` b2Body
+  → `+0x44/+0x48`, with a back-wheel fallback + keep-last-good + NaN guard (`mod/mod.cpp`).
+- **The timer gets a CORRECT dt; physics runs real-time.** `RVTMR` probe in `hook_step` logs the
+  ccTime `dt` vs the real per-frame wall clock: `dt≈0.0166`, `frame_wall≈0.0166`, **ratio ≈ 1.00**,
+  step called ~60×/s. So there is NO frame starvation and NO dt scaling on the physics path — the
+  "anti-tamper freezes the run" theory is **contradicted** (the run is advancing at full speed).
+- **Symptom localized.** The on-screen run time sits at ~`0.0x` (x≈1–2) ≈ ONE frame's worth of dt,
+  and there's no 1-2-3 countdown ("just go"). Signature of the run-timer/countdown state not
+  latching — i.e. elapsed = `gameTime_ − startTimeStamp` with `startTimeStamp` chasing `gameTime_`
+  every frame. Located in libgame: ivars **`gameTime_`** + **`startTimeStamp`**, method
+  **`-[… updateTimer]`@0x5c1a94** (dispatches to sub-methods). Root cause within that path is still
+  OPEN — NOT yet fixed. Next: read `gameTime_`/`startTimeStamp` each frame (find their realized ivar
+  offsets) and/or bisect which libmod hook perturbs the countdown via `rvdebug.txt`.
 
 **Symptom (device-confirmed, consistent, on plain single-player / no-ghost levels):** with `libmod`
 active, the in-race level timer (top-right) stays stuck at `0.00` — the run never registers as

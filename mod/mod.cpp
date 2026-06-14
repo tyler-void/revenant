@@ -52,9 +52,10 @@ extern "C" {
 // load (Apportable realizes class layouts at runtime, so it is NOT the static 0x54). Read it at
 // runtime to find backWheel_ on the bike. The wheel is a PhysicsObject; its [body] = b2Body*.
 #define OFF_BACKWHEEL_IVAROFF 0xd1ccd4
-// The back wheel (a PhysicsObject) stores its b2Body* at this realized ivar offset (found by
-// scanning the wheel for the pointer [wheel body] returns). Reading it directly avoids ANY ObjC
-// call on the bike/wheel per frame — which is what froze/slowed the game's run timer.
+// A PhysicsObject (the back wheel OR the heroTorso chassis) stores its b2Body* at this realized ivar
+// offset; b2Body.m_linearVelocity is at body+0x44 (x) / +0x48 (y). (Earlier notes blamed the
+// per-frame ObjC speed read for the run-timer freeze — that is UNPROVEN: the timer freezes with the
+// speed read OFF too, see modmenu.md — so it is not a constraint on how we read speed here.)
 #define OFF_WHEEL_BODY_IVAR 0xf4
 // Debug flags file (app-readable, no root). Reloaded ~1/s; lets us toggle each game-logic hook
 // LIVE to bisect what interferes with the run timer — no rebuild/reinstall. Missing/empty = all on.
@@ -223,7 +224,7 @@ static void hook_mup(int id_, int x, int y, int d){
 static void (*orig_step)(id,SEL,float) = 0;
 static void (*orig_draw)(id,SEL) = 0;
 static SEL   sel_world=0, sel_gravity=0, sel_setgrav=0;
-static SEL   sel_setzoom=0, sel_camzoom=0, sel_responds=0;
+static SEL   sel_setzoom=0, sel_camzoom=0, sel_responds=0, sel_herotorso=0;
 static id    g_game_self = 0, g_world_last = 0;
 static id    g_cam_self = 0, g_cam_last = 0;
 static id    g_bike_self = 0;        // captured bike (BikeCommon1); set by the spec-setter hooks
@@ -232,20 +233,39 @@ static float g_grav_mult = 1.0f;     // -30..30 (negative = inverted, 1.0 = norm
 static float g_zoom_mult = 1.0f;     // 0.2..5
 static int   g_zoom_mode = 0;        // 0 = flexible (dynamic x mult), 1 = locked (fixed)
 static int   g_step_calls = 0;
-static float g_cur_speed = 0.0f;     // bike's current speed (Box2D m/s), read from the wheel's b2Body
-static bool  g_show_speed = false;   // SPD readout — OFF by default: reading the bike's physics state
-                                     // trips the game's leaderboard/ghost anti-tamper and freezes the
-                                     // run timer. Enable only for free-roam, never a timed/MP run.
+static float g_cur_speed = 0.0f;     // bike's current speed (Box2D m/s) — chassis (heroTorso) body
+static bool  g_show_speed = false;   // SPD readout — opt-in (default OFF). The run-timer freeze is
+                                     // unrelated + unresolved (it freezes with this OFF too, see
+                                     // modmenu.md); kept off by default only to add no per-frame work.
 static bool  g_grav_ok = false, g_can_zoom = false;
 struct V2 { float x, y; };
 
 static void apply_specs();   // defined below (bike spec multipliers)
+static bool step_active();   // defined below: is any menu feature engaged this frame?
+
+// Speed magnitude from a b2Body's m_linearVelocity (+0x44/+0x48). Returns -1 for a null body or a
+// NaN/wild value so the caller can fall back / keep the last good reading.
+static float read_body_speed(void* body){
+    if(!body) return -1.0f;
+    float vx = *(float*)((char*)body + 0x44);
+    float vy = *(float*)((char*)body + 0x48);
+    float s = __builtin_sqrtf(vx*vx + vy*vy);
+    if(!(s >= 0.0f) || s > 1000.0f) return -1.0f;     // NaN / garbage guard
+    return s;
+}
 
 // -[World step:(ccTime)] — the per-frame physics tick (class owns world/gravity/setGravity:).
 // Read the level's base gravity via the game's own getter, write base*mult via setGravity:.
 static void hook_step(id self, SEL cmd, float dt){
     if(!g_en_step){ orig_step(self,cmd,dt); return; }   // bisect: pure pass-through (no gravity/specs/speed)
     g_game_self = self; g_step_calls++;
+    // IDLE FAST-PATH (the run-timer fix): when NO menu feature is engaged, do not touch the game this
+    // frame — skip the [self world] msgSend, apply_specs, gravity and the speed read entirely; just run
+    // the original step. The live-bisect proved the per-frame step BODY (not the spec/gravity writes) is
+    // what breaks the in-race timer; the earlier "gate the writes" attempt still ran [self world] +
+    // apply_specs every frame, which is why it never fixed it. Features re-engage the instant a slider or
+    // toggle leaves default (experiment in free-play, where the timer is unreliable while modding).
+    if(!step_active()){ orig_step(self,cmd,dt); return; }
     id world = ((id(*)(id,SEL))msgSend)(self, sel_world);          // [self world]
     if(world && world != g_world_last){                           // new level
         g_world_last = world;
@@ -261,20 +281,9 @@ static void hook_step(id self, SEL cmd, float dt){
         ((void(*)(id,SEL,float,float))msgSend)(self, sel_setgrav, g_base_gx, g_base_gy*g_grav_mult);
     apply_specs();              // live bike-spec multipliers on the current bike
     orig_step(self, cmd, dt);
-    // current speed for the debug HUD (opt-in via g_show_speed, default OFF). Pure, zero-ObjC memory
-    // reads: bike -> backWheel_ (realized ivar offset) -> +0xf4 b2Body* -> +0x44/0x48 velocity.
-    // It is UNCONFIRMED whether enabling this contributes to the run-timer freeze (see modmenu.md —
-    // the freeze is unresolved and was not cleanly attributable). Default off; enable for free-roam.
-    if(g_show_speed && g_bike_self){
-        int bwoff = *(int*)(g_base + OFF_BACKWHEEL_IVAROFF);    // realized backWheel_ ivar offset
-        id wheel = *(id*)((char*)g_bike_self + bwoff);
-        void* body = wheel ? *(void**)((char*)wheel + OFF_WHEEL_BODY_IVAR) : 0;
-        if(body){
-            float vx = *(float*)((char*)body + 0x44);           // b2Body m_linearVelocity.x
-            float vy = *(float*)((char*)body + 0x48);           // b2Body m_linearVelocity.y
-            g_cur_speed = __builtin_sqrtf(vx*vx + vy*vy);
-        }
-    }
+    // (speed HUD is read from the timer-safe overlay/swap hook via update_speed(), NOT here — running
+    // the speed read inside the physics step still corrupts gameTime_, which breaks BOTH the run timer
+    // and ghost playback. Reading it from the overlay keeps the step idle so both stay correct.)
 }
 
 // -[GameLayer draw] — per-frame; this class owns setCameraZoom:/cameraZoom (the physics
@@ -335,6 +344,15 @@ static void hook_sburn  (id s,SEL c,float v){ g_bike_self=s; g_bburn=v;    g_spe
 static void hook_swheelie(id s,SEL c,float v){g_bike_self=s; g_bwheelie=v; g_spec_have=true; orig_swheelie(s,c,v*g_mwheelie);}
 
 static inline bool modif(float m){ return m < 0.999f || m > 1.001f; }   // multiplier off 1.0× (epsilon)
+// Any live step-hook feature engaged? If not, hook_step takes the idle fast-path and never touches the
+// game (keeps the in-race run timer working during normal play). Zoom lives in the draw hook, not step.
+// NOTE: g_show_speed is deliberately NOT here. The speed HUD is read from the overlay (swap) hook,
+// which is timer-safe, so turning speed on does NOT run the step body — keeping the run timer AND
+// ghost playback correct. Only gravity/spec features (which must run in the physics step) gate here.
+static bool step_active(){
+    return modif(g_grav_mult) || modif(g_mspeed) || modif(g_mnitro)
+        || modif(g_mforce) || modif(g_mburn) || modif(g_mwheelie);
+}
 static void apply_specs(){
     // Write a spec ONLY when actually modified (mult != 1), with a one-shot re-apply on reset to 1.0.
     // Rationale: minimise per-frame writes to the bike's stats. NOTE: this was an attempt to fix the
@@ -534,11 +552,11 @@ static void draw_menu(){
         }
         if(ImGui::BeginTabItem("System")){
             ImGui::Checkbox("Debug HUD (top of screen)", &g_hud_on);
-            ImGui::Checkbox("Show speed in HUD (experimental)", &g_show_speed);
+            ImGui::Checkbox("Show speed in HUD", &g_show_speed);
             ImGui::Spacing();
-            ImGui::TextColored(ImVec4(1.0f,0.6f,0.3f,1.0f), "Note: changing GRAVITY or BIKE SPECS off");
-            ImGui::TextColored(ImVec4(1.0f,0.6f,0.3f,1.0f), "default freezes the level timer (the game's");
-            ImGui::TextColored(ImVec4(1.0f,0.6f,0.3f,1.0f), "anti-cheat). Keep them at 1.0x for timed/MP.");
+            ImGui::TextColored(ImVec4(1.0f,0.6f,0.3f,1.0f), "Note: the in-race timer is UNRELIABLE while");
+            ImGui::TextColored(ImVec4(1.0f,0.6f,0.3f,1.0f), "this mod is active (it can freeze - cause");
+            ImGui::TextColored(ImVec4(1.0f,0.6f,0.3f,1.0f), "unknown). Use the no-mod build for timed runs.");
             ImGui::Spacing();
             ImGui::TextDisabled("Mod-loader: ON");
             ImGui::Separator();
@@ -577,6 +595,25 @@ static void draw_achievements(){
 
 // Hook cocos2d swapBuffers: scene is drawn + GL context current; draw ImGui on top,
 // then call the original (which presents). ARM, in libgame — no Thumb hazard.
+// Read the current bike speed into g_cur_speed for the HUD — from the OVERLAY hook, NOT the physics
+// step. Chassis (heroTorso) body velocity, back-wheel fallback, keep-last-good. Running this here
+// (the timer-safe overlay path) means the speed HUD does NOT perturb gameTime_, so the run timer and
+// ghost replay stay correct even with speed on.
+static void update_speed(){
+    if(!g_show_speed || !g_bike_self) return;
+    float s = -1.0f;
+    if(sel_herotorso){                                        // chassis = true ground speed
+        id torso = ((id(*)(id,SEL))msgSend)(g_bike_self, sel_herotorso);
+        if(torso) s = read_body_speed(*(void**)((char*)torso + OFF_WHEEL_BODY_IVAR));
+    }
+    if(s < 0.0f){                                             // fall back to the back wheel
+        int bwoff = *(int*)(g_base + OFF_BACKWHEEL_IVAROFF);  // realized backWheel_ ivar offset
+        id wheel = *(id*)((char*)g_bike_self + bwoff);
+        if(wheel) s = read_body_speed(*(void**)((char*)wheel + OFF_WHEEL_BODY_IVAR));
+    }
+    if(s >= 0.0f) g_cur_speed = s;                            // else keep last good reading
+}
+
 static void hook_swap(id self, SEL cmd){
     if(!imgui_ready){
         IMGUI_CHECKVERSION();
@@ -599,6 +636,7 @@ static void hook_swap(id self, SEL cmd){
     ImGui_ImplOpenGL3_NewFrame();
     ImGui::NewFrame();
     static int sc = 0; if((sc++ % 30) == 0) update_stats();   // refresh telemetry ~2/s
+    update_speed();                                            // speed HUD via the timer-safe overlay path
     if(g_menu_open) draw_menu();
     if(g_show_ach)  draw_achievements();
     if(g_hud_on)    draw_hud();
@@ -617,6 +655,7 @@ static void install_hooks(){
     sel_world=selReg("world"); sel_gravity=selReg("gravity"); sel_setgrav=selReg("setGravity:");
     sel_setzoom=selReg("setCameraZoom:"); sel_camzoom=selReg("cameraZoom");
     sel_responds=selReg("respondsToSelector:");
+    sel_herotorso=selReg("heroTorso");        // chassis accessor -> PhysicsObject (true bike speed)
     cls_NSString=getClass("NSString");
     reload_flags();   // live bisect flags (rvdebug.txt) — read once at startup
     orig_reader=(id(*)(id,SEL,id,const char*))inline_hook((void*)(g_base+OFF_READER),(void*)hook_reader);
