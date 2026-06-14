@@ -42,15 +42,15 @@ Two families, each with a fixed 8-byte body "magic" (constant plaintext header u
 
 | Family | Files | Body magic |
 |---|---|---|
-| **Levels** | `1_1.dat`…`4_15.dat`, universe `2_1_*.dat` (130 files) | `body[2:10] = [redacted]` |
-| **Config** | `GameConfig_T1..T4`, `ConditionInfo`, `ProductList`, `Shop`, `ca`, `cl` | `body[0:8] = [redacted]` |
+| **Levels** | `1_1.dat`…`4_15.dat`, universe `2_1_*.dat` (130 files) | `body[2:10] = <fixed 8-byte ciphertext marker>` |
+| **Config** | `GameConfig_T1..T4`, `ConditionInfo`, `ProductList`, `Shop`, `ca`, `cl` | `body[0:8] = <fixed 8-byte ciphertext marker>` |
 
 `body[0:2]` of levels is a small per-file field (115/130 are `0000`; a few are `7dfa`, `fe7d`…).
 
 ### Cipher: per-file stream cipher — **NOT** crackable statistically (verified)
 
 The Phase-2 spike **ruled out** every shortcut:
-- **Not a short repeating-XOR** (the save's `[redacted-key]` + column-mode don't touch it;
+- **Not a short repeating-XOR** (the save's recovered key + column-mode don't touch it;
   in-file autocorrelation is flat).
 - **Not a reused keystream / many-time-pad.** Across files `c1 ⊕ c2` is ~50% hi-bit, ~0.4%
   zeros = **random**, even between files that share `body[0:2]` (tested the 115-file `0000`

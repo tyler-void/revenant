@@ -3,7 +3,7 @@
 ## Where it stands
 - **Worlds (all 4 + Halloween + Christmas DLC): UNLOCKED** ✅ (confirmed on device).
   Native patch `isWorldUnlocked:`@0x6b0df0 + `isUniverseUnlocked:`@0x6a5094 → return YES.
-- **Tilt: FIXED** ✅. **data.dat cipher: CRACKED** ✅ (key `[redacted-key]`).
+- **Tilt: FIXED** ✅. **data.dat cipher: CRACKED** ✅ (key recovered on-device; never committed).
 - **Bikes: render as owned (full-color + "PURCHASED" stamp) but NOT yet selectable/rideable.**
   The store's SELECT-vs-"GET IT NOW" gate is not yet flipped. ⚠️ Don't tap "GET IT NOW" on a
   bike — it calls the dead purchase server and hangs (original-game behavior).

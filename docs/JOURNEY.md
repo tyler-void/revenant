@@ -58,7 +58,7 @@ int; the "cumulative" records are an interned hash-consed object graph that **re
 save**, so byte-diffing two saves is useless.
 
 The break came from a **column-mode attack**: the decrypted body is ~46% zero bytes, so the most-common
-byte in each of the 8 columns *is* the key byte. Out popped **`[redacted-key]`** — and decrypting with
+byte in each of the 8 columns *is* the key byte. Out popped the 8-byte key — and decrypting with
 it yields exactly 45.9% zeros, proving it's an 8-byte repeating XOR (not XXTEA). We cracked the save…
 and then discovered the unlock keys aren't hashes of *any* string (brute-forced **71,741** binary
 strings × FNV/Murmur/CRC64/djb2/CFString → **0 hits**). The save was a dead end for the bikes. The real

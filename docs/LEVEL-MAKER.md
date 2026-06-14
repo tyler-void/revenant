@@ -16,11 +16,11 @@ name collision was a red herring).
   + short trailer. e.g. `1_1.dat` = `"80235\0"` + 80235 bytes + 7-byte trailer.
 - **Cipher**: symmetric **keystream-XOR stream cipher** (not AES — lengths aren't
   16-aligned). Across 20 level files ciphertext bytes 2–9 are byte-identical
-  (`[redacted]` = shared plaintext header under a shared keystream), then diverge.
+  (a fixed shared 8-byte ciphertext marker = shared plaintext header under a shared keystream), then diverge.
   ⚠️ **Different, harder cipher than the save.** Confirmed empirically on `1_1.dat`
   (`"80235\0"` + 80235 body + 7-byte trailer `9c66d4a00033f9`): the body's autocorrelation
   is **flat (~0.004 ≈ random) at every shift 1–32**, and column-mode finds no key — so it is
-  NOT a short repeating-XOR (the save's `[redacted-key]` won't touch it, and neither will
+  NOT a short repeating-XOR (the save's recovered key won't touch it, and neither will
   the column-mode trick that cracked the save). It's a real **stream cipher with a long
   non-repeating keystream** (RC4/PRNG/hash-derived). Recovering it therefore REQUIRES reading
   the keystream derivation out of `libgame.so` (the `NSData` cipher category below) — there's

@@ -24,7 +24,7 @@ Good morning ☕. Here's exactly where things stand.
 | Tilt / lean-to-flip | ✅ confirmed | `MCAccelerometer` force-register + try/catch native bind + HIGH_SAMPLING_RATE perm |
 | All 4 worlds + 2 DLCs | ✅ confirmed by you | native patch: `isWorldUnlocked:`/`isUniverseUnlocked:` → YES |
 | Bikes look owned | ✅ (cosmetic) | native patch: `purchased`/`revealed`/`isRevealed`/`locked` getters |
-| `data.dat` cipher | ✅ cracked | 8-byte XOR key `[redacted-key]`; format mapped |
+| `data.dat` cipher | ✅ cracked | 8-byte XOR key (recovered, not committed); format mapped |
 
 ## The bikes — honest status
 The store's **SELECT-vs-"GET IT NOW"** decision reads each bike's owned-state through an
