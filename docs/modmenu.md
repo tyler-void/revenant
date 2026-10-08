@@ -179,7 +179,8 @@ Re-skinning/re-speccing the 21 EXISTING bike slots works + persists (mod-loader)
 - cocos2d DOES have the search-path API (`setSearchPath:`@0x4d8b1c, `_searchPath` ivar,
   `getPathForFilename:withResourceDirectory:withSearchPath:`) — still the preferred
   mod-loader IF consulted.
-- The encrypted reader **`+[NSData DataWithContentsOfFile:Password:]`@0x64ea98 fires on
+- The encrypted reader **`+[NSData DataDecryptedFromData:Password:]`@0x64ea98** *(mislabelled
+  `DataWithContentsOfFile:Password:` at the time — see research.md)* **fires on
   LEVEL LOAD** (proven via the RVLEN keylog). A read-trace hook is installed to log the
   exact `.dat` path (`[path UTF8String]`).
 - `screencap` = black (GL surface) → can't navigate blind; the level-load trace needs the

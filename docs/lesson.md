@@ -61,6 +61,9 @@
   Generic `objdump` reports `architecture: UNKNOWN!`; use Capstone in `CS_MODE_ARM`.
   Find an IMP by scanning PT_LOAD bytes for a 32-bit LE pointer to the selector
   string, then read the word at +8.
+  ⚠ The −4 rule (used in older notes and the unidbg harness comments) returns the
+  PREVIOUS method's IMP and mislabels silently: `0x64ea98` is
+  `DataDecryptedFromData:Password:`, not `DataWithContentsOfFile:Password:` (`0x64ec3c`).
 - **One mechanic can have MULTIPLE consume paths — patch them all.** Unlimited
   fuel looked done (gauge redirect + `useFuel:` NOP) but gas still "dried" mid-play.
   Cause: `consumeBars:` @0x6ab4b0 is a SEPARATE singleplayer per-attempt consume
@@ -94,6 +97,14 @@
   it WIPES any swapped-in files. To device-test an edited asset: swap into the
   already-decoded `build/work`, then `apktool b build/work` directly + sign +
   `adb install -r`. (Keystore must stay → `install -r` preserves the save.)
+- **The reproducible build must never read gitignored files.** `patch_tilt` used to
+  load the owner's tilt smali from `ref/` (gitignored), so `build.sh` on a fresh clone
+  died at the tilt step — it only ever worked on the owner's machine. *Fix:* express
+  patches as anchored edits on the decoded original, and test the build from a clean
+  decode in a scratch dir.
+- **A modified decompiled class is still decompiled code.** A whole tweaked
+  `MCAccelerometer.smali` (mostly Miniclip's class) was committed in the initial commit
+  despite the no-smali rule. Ship patches as anchored edits, never whole classes.
 - **`.gitignore` has NO inline comments** — git treats `base/ # note` as a literal
   pattern matching nothing. Comments on their own lines. Always
   `git check-ignore -v <path>` to verify before committing.

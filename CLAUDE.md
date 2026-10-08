@@ -42,8 +42,9 @@ the rest are WIP.)
   in-browser binary-AXML editing** (`web/src/axml.ts` — drops tracking perms + GCM/AdX/OpenUDID/boot
   components), Tailwind-responsive UI. The browser-built APK installs, boots, and tilt-steers (grant
   only "Motion"/sensor). Full record: **[docs/patcher.md](docs/patcher.md)**.
-  **REMAINING:** GitHub Pages deploy (Actions); refactor `apply_patches.py` to read the manifest;
-  (optional) APK v2/v3 signing in `wasm/`. **DISTRIBUTION SPLIT (owner 2026-06-14):** only the
+  Pages deploy ✅ live (tyler-void.github.io/revenant); `apply_patches.py` reads the manifest ✅ and its
+  tilt fix mirrors the wasm rewrite. **REMAINING:** (optional) APK v2/v3 signing in `wasm/`.
+  **DISTRIBUTION SPLIT (owner 2026-06-14):** only the
   **unlock-all browser-patched APK** is distributed (the "just play" core, free). The **mod menu**
   (Phase 6, `libmod.so`) is a personal/power-user extra the owner is considering paywalling
   (Patreon/BMC) — but note `mod/mod.cpp` + `mod/build.sh` + `docs/modmenu.md` are ALREADY PUBLIC on
@@ -93,9 +94,10 @@ comingSoon gate located, needs more trace rounds).
   Pipeline: `.dat → strip header → DECRYPT → [levels: GUNZIP] → binary plist (bplist00)`.
 - Cipher core (libgame.so): `cipher_init@0x650090`, `cipher_setkey@0x650570` (key = raw
   `char*`), DECRYPT `cipher_process@0x65085c` (→block 0x650ca8), **ENCRYPT
-  `cipher_process@0x6507d4`** (→block 0x6508e4). Decrypt reads via
-  `+[NSData DataWithContentsOfFile:Password:]@0x64ea98` = `atoi(header)` +
-  `cipher_process(file+8, len-8)` (NO nibble-swap in this method) + take declLen bytes.
+  `cipher_process@0x6507d4`** (→block 0x6508e4). Decryptor
+  `+[NSData DataDecryptedFromData:Password:]@0x64ea98` = `atoi(header)` +
+  `cipher_process(data+8, len-8)` (NO nibble-swap in this method) + take declLen bytes.
+  (The file-path reader `DataWithContentsOfFile:Password:` is `@0x64ec3c` — the mod-loader hook.)
 - ENCRYPT (proven): `file = "<declLen>\0" + filler-to-offset-8 +
   cipher_process_ENCRYPT(gzip-plaintext padded to ×8)`.
 - **KEYS (captured locally, NEVER committed):** ALL 142 levels share ONE key (24-byte;
@@ -156,7 +158,7 @@ content-scale between atlas texels and level points. Hard-won render rules:
   Resolve against the LEVEL'S world (lid first number; world1→elements_default, no elements_t1)
   — else you draw the wrong world's art (a real bug we hit: world-3 ice in world 1).
 - **Sprites are Y-up** vs canvas Y-down → `ctx.scale(1,-1)` before drawImage (else upside-down).
-- **Content scale `SPRITE_CS`** (currently 2) divides sprite draw size (texels→points).
+- **Content scale `SPRITE_CS`** (currently 8.5, live-tunable via the toolbar `scale` box) divides sprite draw size (texels→points).
   ⚠️ STILL NOT EXACT — composed structures (bridges, doors, finish gates, rope bridges)
   render at the wrong size; the green physics outline is the GROUND-TRUTH scale and sprites
   must match it. Likely needs per-type handling (ComposedSprite children may be positioned/
@@ -170,12 +172,13 @@ content-scale between atlas texels and level points. Hard-won render rules:
 
 ## Roadmap / phases (see `docs/ROADMAP.md`)
 1 Bike editor ✅ · 2 Level decrypt ✅ · 3 Level editor 🚧 (editor+encode done; render fidelity WIP)
-· 4 World-5 custom-level slot + **mod-loader** (redirect asset loads to an external `mods/`
-folder via a native patch on the cocos2d path resolver `CCFileUtils fullPathForFilename:`;
-game already has `getExternalStoragePath`) · 5 procedural gen · 6 ImGui mod menu · 7 offline achievements.
+· 4 World-5 custom-level slot + **mod-loader** (done: libmod hooks the encrypted-file reader
+`DataWithContentsOfFile:Password:@0x64ec3c` and redirects to an external `mods/` folder)
+· 5 procedural gen · 6 ImGui mod menu · 7 offline achievements.
 
 ## Environment
 apktool, uber-apk-signer, adb, ffmpeg, ImageMagick (`magick`), capstone, Ghidra
 (`/opt/ghidra` — use Java GhidraScripts, PyGhidra is broken). No dwebp/cwebp/Pillow in
 system python (a Pillow venv exists at `/tmp/webp-venv`). Method-table technique: ObjC
-`{IMP,name,types}` 12-byte entries near `0xcfd5d0`; lib loads at base `0x40000000` in unidbg.
+`{name,types,IMP}` 12-byte entries near `0xcfd5d0` — IMP at **+8** from the selector-name pointer
+(the word at −4 is the PREVIOUS method's IMP); lib loads at base `0x40000000` in unidbg.

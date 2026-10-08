@@ -22,10 +22,11 @@ re-encrypt with the game's own writer. The plaintext is JSON (Catmull-Rom spline
 | 1 | **Bike editor** (modify + clone-to-create bikes) | 🟢 Easy | ✅ editor done (CLI + web UI); new-bike *roster registration* gated on Phase 2 |
 | 2 | **Level-decrypt spike** (unidbg → JSON → schema) | 🟡 Medium | ✅ SOLVED — Blowfish decrypt+encrypt, full round-trip, universal level key |
 | 3 | **Level editor** (splines + object palette → re-encrypt) | 🟡 Medium | ✅ **beta** — viewer + drag-edit + save/export + themed render, device-verified; render fidelity community-refined |
-| 4 | **World 5 = Custom/Community Levels** (the delivery mechanism) | 🟡 Medium | 🚧 swap-into-slot works (proven); additive World-5 slot needs level-count RE |
+| 4 | **World 5 = Custom/Community Levels** (the delivery mechanism) | 🟡 Medium | 🚧 mod-loader ✅ (drop `mods/<w>_<l>.dat`, no root); additive World-5 slot paused ([procgen.md](procgen.md)) |
 | 5 | **Procedural level generator** (random/seeded tracks) | 🟡 Medium | ✅ done — `levelgen.py` rolling-hills tracks, generate→encode→device-verified |
-| 6 | **ImGui mod menu** (in-game hub: live tuning) | 🟠 Med-Hard | ⬜ |
-| 7 | **Achievement tab** (revive the dead Google-Play achievements) | 🟡 Medium | ⬜ |
+| 6 | **ImGui mod menu** (in-game hub: live tuning) | 🟠 Med-Hard | 🟡 works — live gravity/zoom/bike specs/HUD, device-verified ([modmenu.md](modmenu.md)) |
+| 7 | **Achievement tab** (revive the dead Google-Play achievements) | 🟡 Medium | 🚧 achievement list captured + viewer in libmod; offline unlocking not done |
+| 8 | **Browser one-click patcher** (BYO APK → patched, signed APK, in-browser) | 🟠 Med-Hard | ✅ live on GitHub Pages ([patcher.md](patcher.md)) |
 
 ---
 
@@ -52,7 +53,10 @@ Two capabilities:
 - You can't *author/share* a bike purely on-device without the mod menu also writing the plist; the
   PC tool is the source of truth, the mod menu is the live feedback loop.
 
-### Phase 2 — Level-decrypt spike 🚧 (blocked, well-characterized)
+### Phase 2 — Level-decrypt spike ✅ (solved — the notes below are pre-solution history)
+
+> **Superseded:** the cipher is **Blowfish** (not a per-file stream cipher) and all levels share
+> one key. See the Phase 3 status below and [research.md](research.md).
 
 Use unidbg to invoke the game's own decryptor on a level → emit JSON → document the schema. This
 de-risks Phases 3–5 (and unlocks `ProductList`/`Shop`/`ConditionInfo` — see below).
@@ -94,6 +98,11 @@ drop elements from the palette → export JSON → re-encrypt via the game's cip
 
 ### Phase 4 — World 5 = Custom / Community Levels ⭐🔬
 
+> **Status:** the runtime **mod-loader is done** — libmod hooks the encrypted-file reader so a
+> `mods/<w>_<l>.dat` replaces that level (no root, device-verified; see [modmenu.md](modmenu.md)).
+> It's OFF by default because it was a suspect in the mod-menu timer bug. The additive World-5
+> slot is paused ([procgen.md](procgen.md)).
+
 **The delivery mechanism.** The world-select screen shows a **blank "?" slot after World 4** — the
 natural home for community content. Repurpose it as the **Custom Levels** world:
 - Provide level files at the `5_*.dat` paths (the engine's path format is `%d/%d_%d.dat`).
@@ -110,11 +119,18 @@ generator also makes shareable one-line level codes possible.
 
 ### Phase 6 — ImGui mod menu 🟠
 
+> **Status:** works, device-verified, **no root** — `libmod.so` is packaged into the APK and loaded
+> from `GameActivity.<clinit>`; the overlay rides cocos2d's `swapBuffers`. See [modmenu.md](modmenu.md).
+
 Inject a 32-bit `.so` → hook `eglSwapBuffers` → ImGui overlay + touch input (rooted device). The
 in-game hub: live bike-handling sliders, god-mode toggles, the **custom-level browser**, and the
 **achievement tab**.
 
 ### Phase 7 — Achievement tab 🟡
+
+> **Status:** in progress — libmod hooks `-[ConditionManager processConditionInfo:Achievements:]`
+> to capture the achievement list and shows it in an offline viewer (the Stats button is
+> rerouted to it). Recording unlocks locally is not done yet.
 
 The game has an internal achievement system wired to **Google Play Games Services** — dead servers,
 so achievements never register. Plan: RE the achievement IDs + the in-game unlock call-sites → hook
@@ -139,9 +155,9 @@ org** (see [PRESERVATION-PLAYBOOK](PRESERVATION-PLAYBOOK.md)) — a repo of comm
 - **Config codec — SOLVED.** unidbg decryption oracle (`tools/unidbg/.../LevelDecrypt.java`, key via
   `BR_KEY`) + on-device key capture (`build/patch_keylog.py` → logcat). The config key decrypts
   `ProductList`/`Shop`/`GameConfig`/`ConditionInfo` to 100% XML.
-- **Level codec — OPEN.** Levels use a **separate** cipher (the config key/cipher decrypt none of the
-  142 `.dat` files). Lead: `+[NSArray ArrayWithContentsOfFilePass2:]` ("second pass"). Next: find its
-  `setkey`, re-spin the keylog patch onto it, capture a level's key, decrypt via that path.
+- **Level codec — SOLVED.** Same Blowfish cipher as the configs, but levels use their own key: one
+  universal 24-byte key for every level (the config key decrypts none of them). Decode/encode via
+  `tools/unidbg/.../LevelCodec.java`; see [research.md](research.md).
 - **Bike roster — ANSWERED.** It's the IAP product list in decrypted `ProductList.dat`
   (`com.miniclip.bikerivalsbike1–14`, packs, coins).
 - Whether **World 5** needs a native patch beyond `WorldDefinition.plist` (level-count/unlock gate).
@@ -158,3 +174,4 @@ org** (see [PRESERVATION-PLAYBOOK](PRESERVATION-PLAYBOOK.md)) — a repo of comm
   key capture (Frida is dead here → ARM keylog stub → logcat); decrypts the roster (Phase 1),
   achievements `ConditionInfo` (Phase 7), shop, game config.
 - ⬜ **Level cipher** is the remaining Phase-2 piece (separate `Pass2` cipher — see above). Banked here.
+  *(Since solved: same Blowfish, one universal level key — see Phase 3.)*

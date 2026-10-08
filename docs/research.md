@@ -9,9 +9,13 @@ Bike Rivals 1.5.2 is **cocos2d + Apportable** (Objective-C runtime over C++/Box2
 ported from iOS to Android). `libgame.so` (ARM 32-bit) holds the game logic.
 Implications:
 - ObjC method dispatch via `objc_msgSend`; methods live in a method table of
-  12-byte `{IMP, name_ptr, types_ptr}` entries (cluster near `0xcfd5d0`). This is
-  how we find function addresses — match a selector-name string offset, read the
-  IMP 4 bytes before it. **Validated** against known IMPs.
+  12-byte `{name_ptr, types_ptr, IMP}` entries (e.g. the NSData cipher methods near
+  `0xcfd5d0`). To find a function: locate the selector-name string, find the
+  pointer to it, read the IMP at **+8**. ⚠ The word 4 bytes *before* the name
+  pointer is the PREVIOUS method's IMP — older notes used −4 and mislabelled
+  addresses (e.g. `0x64ea98` is `DataDecryptedFromData:Password:`, not
+  `DataWithContentsOfFile:Password:`). Re-verified 2026-10-08 against
+  `isWorldUnlocked:` / `isUniverseUnlocked:` / `consumableCount:`.
 - Physics is **Box2D**: Y-UP world, units are "points," **CCW winding = solid**.
 - Rendering is cocos2d: Y-UP, rotation **clockwise-positive**, content-scale for
   retina/HD assets.
@@ -24,9 +28,11 @@ Implications:
   `cipher_init@0x650090`, `cipher_setkey@0x650570` (key = raw `char*`),
   DECRYPT `cipher_process@0x65085c` (→ block `0x650ca8`),
   **ENCRYPT `cipher_process@0x6507d4`** (→ block `0x6508e4`).
-- **Container**: `"<plaintextLen>\0"` + body. Decrypt reader
-  `+[NSData DataWithContentsOfFile:Password:]@0x64ea98` = `atoi(header)` +
-  `cipher_process(file+8, len-8)` + take `declLen` bytes (no nibble-swap here).
+- **Container**: `"<plaintextLen>\0"` + body. Decryptor
+  `+[NSData DataDecryptedFromData:Password:]@0x64ea98` = `atoi(header)` +
+  `cipher_process(data+8, len-8)` + take `declLen` bytes (no nibble-swap here).
+  The file-path reader `+[NSData DataWithContentsOfFile:Password:]` is `@0x64ec3c`
+  (the one libmod's mod-loader hooks).
 - **Pipeline**: `.dat → strip header → DECRYPT → [levels: GUNZIP] → binary plist`.
 - **Encrypt** (mirror): `file = "<declLen>\0" + filler-to-offset-8 +
   cipher_process_ENCRYPT(gzip plaintext padded ×8)`.
@@ -164,8 +170,9 @@ over-spine** model — "playable by construction," not by luck:
   `WorldDefinition.plist`. Per-theme `GameConfig_T1..T4.dat` (config key) are the
   prime suspects (no `GameConfig_T5` exists → World 5 unconfigured). Decode them
   to learn how to register/enable an additive World 5.
-- **Mod-loader hook**: `-[CCFileUtils fullPathForFilename:]` redirect to an
-  external `mods/` dir (game has `getExternalStoragePath`, `/sdcard`).
+- **Mod-loader hook — DONE (2026-06-14).** Not via `CCFileUtils`: libmod hooks the
+  encrypted-file reader `DataWithContentsOfFile:Password:@0x64ec3c` and swaps in
+  `mods/<basename>` when it exists. See [modmenu.md](modmenu.md).
 - **Why a minimal generated level hung** — ANSWERED by the corpus analysis: the
   real ground is many small CCW polygons; our single 43-vtx polygon built an
   invalid Box2D body → bike fell through → tutorial hung. Generator now emits a

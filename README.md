@@ -37,7 +37,7 @@ A dead, server-locked, malware-infested 2014 Android game — cocos2d-iphone shi
 - 🔓 **A Blowfish save/level cipher, cracked without reimplementing it** — by driving the game's *own* native ARM cipher inside [**unidbg**](https://github.com/zhkl0228/unidbg) (a JVM/Unicorn emulator) as a decode **and** encode oracle. Round-trip device-verified.
 - 🧩 **Binary `AndroidManifest.xml` (AXML) surgery + in-browser APK v1 signing** — strip tracking permissions/components and re-sign with WebCrypto + PKCS#7, no SDK. Output installs on Android 13.
 - 🎮 **A native in-game mod menu** — an NDK `.so` injected at class-init, relocating ARM32 inline hooks, an ImGui overlay riding the GL `swapBuffers` hook, with touch.
-- 🛠️ A reproducible CLI build, a level decode→edit→re-encode toolkit, and an honest write-up of the dead ends (including the one bug I *couldn't* crack).
+- 🛠️ A reproducible CLI build, a level decode→edit→re-encode toolkit, and an honest write-up of the dead ends (including a timer bug that took a live bisect to crack).
 
 **Brain & direction:** [Tyler](https://github.com/tyler-void). **Scalpel:** AI coding agents under direction. Built async, remote-first, on a 32-bit target where *every* off-the-shelf dynamic-analysis tool failed.
 
@@ -112,7 +112,7 @@ Auto-built and deployed to GitHub Pages by [a CI workflow](.github/workflows/dep
 
 ### 5 · A native in-game mod menu (libmod)
 An NDK lib injected via `GameActivity.<clinit>`, with a hand-rolled **relocating ARM32 inline hook** (overwrites a method's prologue, relocates the displaced PC-relative instructions into a trampoline, and aborts rather than corrupt on anything it can't relocate), an **ImGui overlay** drawn from the cocos2d `swapBuffers` hook, and touch routed into ImGui's event queue. Live gravity / camera-zoom / bike specs; a debug HUD; reset-progress. → [`docs/modmenu.md`](docs/modmenu.md)
-> **Honest status:** on modified runs the in-race timer freezes — likely the game's ghost/leaderboard anti-tamper, but I couldn't isolate it deterministically after extensive bisecting, so it's documented as **open**. The mod menu is a free-play tool; the *distributed* build has no mod menu and a working timer.
+> **Honest status:** the in-race timer freeze on modded runs is **fixed**. It looked like anti-tamper, but a live bisect proved our own per-frame physics hook was corrupting the game clock (which also garbled the ghost); the hook now does nothing unless a physics feature is on. Trade-off: while the gravity or bike-spec sliders are engaged, the timer and ghost run skewed. The *distributed* build has no mod menu.
 
 ---
 
@@ -126,7 +126,7 @@ An NDK lib injected via `GameActivity.<clinit>`, with a hand-rolled **relocating
 | Reproducible CLI build (`build/build.sh`) | ✅ done · deterministic, malware-free |
 | Level editor (decode → JSON → web editor → re-encode → loadable) | 🚧 works · WYSIWYG render fidelity imperfect |
 | Procedural level generator | 🟡 works · paused with the World-5 effort |
-| In-game ImGui mod menu (`libmod`) | 🟡 works · run-timer freeze on modded runs **open/unresolved** |
+| In-game ImGui mod menu (`libmod`) | 🟡 works · timer freeze fixed; gravity/bike-spec sliders skew the timer while engaged |
 | Offline achievements viewer | 🚧 in progress |
 
 ---
@@ -156,7 +156,7 @@ Re-installs preserve your save (stable signing key). The emulation harness is in
 - **When every debugger fails, emulate the *library*, not the *device*.** Frida crashes the 32-bit game; SELinux blocks `/proc/mem`; the modern Android emulator dropped ARM. Running one `.so` in unidbg was the whole game.
 - **GNUstep non-fragile ivars defeat naive static patching** — offsets are runtime-resolved (also why a hard-coded ivar offset is wrong; read the realized `_OBJC_IVAR_$_…` value at runtime).
 - **Verify on real hardware, and don't trust noisy single runs.** My first "unlimited fuel" patched the wrong path and *looked* fine until the user played one level; a "speed" bug looked real for ~15 cycles and turned out to be a confound. Establish deterministic-vs-intermittent *before* bisecting.
-- **Don't write a hypothesis up as fact.** The mod-menu timer freeze is real and unsolved — and it's documented that way, not papered over.
+- **Don't write a hypothesis up as fact.** The mod-menu timer freeze looked like anti-tamper; a live bisect proved it was our own per-frame hook — and it stayed documented as *open* until that proof existed.
 
 The full multi-day siege — every dead end, the overnight unidbg breakthrough, the timeline — is in **[`docs/JOURNEY.md`](docs/JOURNEY.md)**.
 

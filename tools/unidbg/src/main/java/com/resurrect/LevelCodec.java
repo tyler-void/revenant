@@ -27,8 +27,8 @@ import java.io.ByteArrayOutputStream;
  *   ENCRYPT  cipher_process @ 0x6507d4  (block fn 0x6508e4)
  * plus cipher_init @ 0x650090 and cipher_setkey @ 0x650570 (key = raw char*).
  *
- * Decrypt is done via the high-level reader +[NSData DataWithContentsOfFile:
- * Password:] (0x64ea98), which = atoi(header) + cipher_process_DECRYPT(file+8,
+ * Decrypt is done via +[NSData DataDecryptedFromData:Password:] (0x64ea98),
+ * which = atoi(header) + cipher_process_DECRYPT(data+8,
  * len-8) + take declLen bytes (no nibble-swap). Encrypt mirrors that framing
  * with the encrypt-direction cipher:
  *
@@ -47,7 +47,7 @@ import java.io.ByteArrayOutputStream;
  * (the codec result is already written by then).
  */
 public class LevelCodec {
-    static final long DWF_PW   = 0x64ea98L; // +[NSData DataWithContentsOfFile:Password:] (decrypt reader)
+    static final long DWF_PW   = 0x64ea98L; // +[NSData DataDecryptedFromData:Password:] (decryptor)
     static final long C_INIT   = 0x650090L; // cipher_init(ctx)
     static final long C_SETKEY = 0x650570L; // cipher_setkey(ctx, char* key)
     static final long C_PROC_E = 0x6507d4L; // cipher_process ENCRYPT (→ block 0x6508e4)

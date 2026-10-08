@@ -16,8 +16,8 @@
   the `predev`/`prebuild` script (single source of truth; the copy is gitignored).
 
 ## The shared patch manifest — `patches/manifest.json`
-One declarative file feeds BOTH the CLI (`build/apply_patches.py`, TODO: refactor to read it) and
-the browser app. Sections:
+One declarative file feeds BOTH the CLI (`build/apply_patches.py` reads `native` +
+`androidManifest.dropPermissions`) and the browser app. Sections:
 - **`native`** — in-place ARM byte-patches on `lib/armeabi-v7a/libgame.so`: `{name, off, expect,
   patch, group, desc}`. Each is verified against `expect` before writing (wrong/non-1.5.2 libgame
   → skip + warn, never corrupt). Groups: `unlock` / `fuel` / `nitro`. **DONE in the web app** —
@@ -93,7 +93,11 @@ the browser app. Sections:
    `https://<owner>.github.io/<repo>/` (vite `base` defaults to `/revenant/`; override via the
    `VITE_BASE` repo variable if the repo is named differently). Verified `bun run build` emits a
    complete `dist/` (index + manifest.json + logo.png + revenant_wasm.wasm + assets).
-3. **Refactor `apply_patches.py`** to read `patches/manifest.json` (one source for CLI + web).
+3. ✅ ~~Refactor `apply_patches.py`~~ — done (c2afd81): native patches + dropped permissions come
+   from the manifest. The CLI tilt fix is anchored edits on the decoded original smali that mirror
+   `dex_tilt_rewrite` (identical `onSensorChanged` after disassembling both builds). Remaining
+   CLI/web differences: the CLI also adds `HIGH_SAMPLING_RATE_SENSORS` and the IAP smali unlock;
+   only the web drops the tracking components (`dropComponents`).
 4. (Optional) **APK v2/v3 signing in `wasm/`** (Rust `rsa`/`sha2` + the APK Signing Block) — v1
    already installs on Android 13, so this is hardening, not required.
 

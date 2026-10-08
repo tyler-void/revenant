@@ -27,7 +27,7 @@ import java.io.File;
  * methods to capture the constant Password (r3), and log the returned NSData.
  */
 public class LevelDecrypt {
-    static final long DWF_PW   = 0x64ea98L; // +[NSData DataWithContentsOfFile:Password:]
+    static final long DWF_PW   = 0x64ea98L; // +[NSData DataDecryptedFromData:Password:]
     static final long DWF_NOPW = 0x64f378L; // +[NSData DataWithContentsOfFile:]
     static final long DEC_PW   = 0x64e93cL; // +[NSData DataDecryptedFromData:Password:]
     static final long SETKEY   = 0x650570L; // cipher_setkey(ctx, key)

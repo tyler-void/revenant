@@ -70,9 +70,11 @@ cd tools/unidbg && JAVA_HOME=/usr/lib/jvm/java-17-openjdk \
 ```
 
 ## 7. Find a function address in libgame.so (method table)
-Match a selector-name string offset, read the IMP 4 bytes before any pointer to it
-(entries are 12-byte `{IMP, name, types}` near `0xcfd5d0`). Validate against a known
-IMP. See `tools/unidbg/.../LevelCodec.java` for the offsets we use.
+Find the selector-name string, find the 32-bit LE pointer(s) to it, and read the IMP
+at **+8** from that pointer (entries are 12-byte `{name, types, IMP}`, e.g. near
+`0xcfd5d0`). NOT −4 — that word is the previous method's IMP. Validate against a
+known IMP (e.g. `isWorldUnlocked:` → `0x6b0df0`). `libgame.so` is ARM (not Thumb);
+vaddr == file offset in both PT_LOAD segments. See `tools/unidbg/.../LevelCodec.java` for the offsets we use.
 
 ## 8. Edit a bike
 ```bash

@@ -10,14 +10,15 @@ Compiled from the modding work + the Phase-2 level-decrypt spike (see [ROADMAP](
 ```
 
 - **Decrypt** = the game's own cipher, driven in unidbg ([tools/unidbg/.../LevelDecrypt.java](../tools/unidbg/src/main/java/com/resurrect/LevelDecrypt.java),
-  `BR_KEY` env). IMPs: `+[NSData DataWithContentsOfFile:Password:]` `0x64ea98` (cipher core
+  `BR_KEY` env). IMPs: `+[NSData DataDecryptedFromData:Password:]` `0x64ea98` (cipher core
   `cipher_init 0x650090` / `setkey 0x650570` / `process 0x65085c`); key is a raw `char*`.
 - **Keys are captured on-device** (Frida is dead here) with [build/patch_keylog.py](../build/patch_keylog.py):
   an ARM stub hooks `cipher_setkey`/`cipher_process` and logs the key (hex) + decrypt length to logcat
   (tags `RVKEY`/`RVLEN`). You play; the real key lands.
   - **Config files** (`ProductList`/`Shop`/`GameConfig`/`ConditionInfo`) — ONE shared **config key** (50 B),
     plaintext is **XML plist** (no gzip). → bike roster + IAP, achievements, game config.
-  - **Level files** (`<w>_<l>.dat`) — a **per-level key** (e.g. 1_1 = 24 B), and the decrypted body is
+  - **Level files** (`<w>_<l>.dat`) — ONE universal **level key** (24 B; the early "per-level key"
+    belief was wrong — 1_2 and 4_7 decrypt with the 1_1 key), and the decrypted body is
     **gzip** → gunzip → **binary plist**.
 - **Level plist schema** (1_1: 384 entities):
   `{ lid, type, times:[medal times], Entities:[ { Selected, Type:"EditorPhysicsObject",
@@ -78,13 +79,23 @@ Box2D edge chains (see [LEVEL-MAKER](LEVEL-MAKER.md)).
 
 ### Crypto internals (recovered — file offsets == vaddr)
 
-Method table (12-byte entries `{IMP, name_ptr, types_ptr}` at `.data` ~`0xcfd5d0`):
+Method table (12-byte entries `{name_ptr, types_ptr, IMP}` at `.data` ~`0xcfd5d0`):
+
+> ⚠ **Corrected 2026-10-08.** This section was first written with the IMP read 4 bytes *before*
+> the name pointer, which is the PREVIOUS method's IMP — so every label was off by one entry.
+> Corrected table below (IMP = word at +8). In the older prose further down, read
+> "`DataWithContentsOfFile:Password:` `0x64ea98`" as **`DataDecryptedFromData:Password:`**, and
+> "no-pw `DataWithContentsOfFile:` `0x64f378`" as **`ArrayWithContentsOfDataPass2:`** — which is
+> exactly why those IMPs "decrypted passed data" and "never read a file".
 
 | Method | IMP |
 |---|---|
-| `+[NSData DataDecryptedFromData:Password:]` | `0x64e93c` |
-| `+[NSData DataWithContentsOfFile:Password:]` | `0x64ea98` |
-| `+[NSData DataWithContentsOfFile:]` (no-password) | `0x64f378` |
+| `+[NSData PerformObf]` | `0x64e93c` |
+| `+[NSData DataDecryptedFromData:Password:]` | `0x64ea98` |
+| `+[NSData DataWithContentsOfFile:Password:]` | `0x64ec3c` |
+| `+[NSData ArrayWithContentsOfDataPass2:]` | `0x64f378` |
+| `+[NSData DataWithContentsOfFile:]` (no-password) | `0x64f440` |
+| `+[NSData ArchiveRootObject:ToFile:Password:]` | `0x64fa38` |
 
 - **Cipher is layered, NOT a trivial transform.** `DataDecryptedFromData:` includes a **nibble-swap**
   pass (`b=(b>>4)|(b<<4)` at `0x64e9a0–0x64e9c4`, gated even/odd by `tst r0,#1`) — but nibble-swap
@@ -96,14 +107,14 @@ Method table (12-byte entries `{IMP, name_ptr, types_ptr}` at `.data` ~`0xcfd5d0
   selectors are interned via `sel_getUid`-like **`0x37295c`** then dispatched through
   **`0x3783d4`** (the `objc_msgSend` equivalent). No named `objc_msgSend`/`objc_getClass` export
   (Apportable inlines/renames); `sel_registerName` @ `0x3775e0` IS exported.
-- **The cipher is a 3-call stream API** (recovered from `DataWithContentsOfFile:Password:` @ `0x64ea98`):
+- **The cipher is a 3-call stream API** (recovered from `DataDecryptedFromData:Password:` @ `0x64ea98`):
   ```
   ctx = stack buffer (~0x1080, from `sub sp,#0x4c` + `sub sp,#0x1000`)
   0x650090(ctx)                 ; cipher_init
   0x650570(ctx, password)       ; cipher_setkey   (r1 = the Password NSString/bytes)
   0x65085c(ctx, data+8, len-8)  ; cipher_process  (decrypts in place; skips the 8-byte magic)
   ```
-  `DataDecryptedFromData:` also applies the nibble-swap pass. **If `0x650090/0x650570/0x65085c` are
+  (The nibble-swap code at `0x64e9a0–0x64e9c4` sits inside `PerformObf`@`0x64e93c`, not the decryptor.) **If `0x650090/0x650570/0x65085c` are
   msgSend-free leaves, call them directly** in unidbg (`module.callFunction`, the proven getter
   pattern) with a malloc'd ctx + the level body + the key — no ObjC dispatch needed. The one missing
   input is the **password value** (the constant the caller passes); recover it by resolving the no-pw
