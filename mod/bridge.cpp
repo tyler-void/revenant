@@ -376,7 +376,10 @@ static void goto_tick(bool in_level){
     char f[200];
     switch(g_goto.ph){
     case G_NAV: {
-        if(in_level && !g_goto.raced){                          // in some other level: back out first
+        // in some other level: back out first. in_level alone isn't enough — the main menu's animated
+        // background steps physics too (VERIFIED: a goto from the menu logged back_out via none), so
+        // require the level's PauseMenu to exist.
+        if(in_level && !g_goto.raced && find_class("PauseMenu", 8)){
             if(t - g_goto.last_action > 2.0){
                 g_goto.last_action = t;
                 rv_event("goto_progress", ("\"step\":\"back_out\",\"via\":" + js(back_out())).c_str());

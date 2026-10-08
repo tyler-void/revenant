@@ -34,6 +34,24 @@ Inspector (right) to edit properties + medal times, **Save** (→ cache), **Expo
 (→ encrypted `.dat`; needs the key in the toolbar field). Tune the `scale` box to
 match the green outline.
 
+Editing (Phase-4 MVP): shift-click multi-select; drag moves the selection WITH its children and
+the joints bound only to it; **Del** deletes the selection + children + joints on removed bodies
+(confirm lists them; every other ref is remapped); **Ctrl+D** duplicate; **Ctrl+C / Ctrl+V** copy and
+paste between levels; click an edge to insert a vertex, **Alt-click** a vertex to delete it; **T**
+draw terrain (click points, Enter); **Ctrl+Z / Ctrl+Shift+Z** undo/redo. With nothing selected the
+Inspector shows the Level panel (target slot = `lid`, medal times 1★/2★/3★ descending, Save as copy).
+The Lint panel gates Export/Push on errors.
+
+**▶ Push to game** (needs the libmod build installed, adb, and `uv`): save → lint → export → push
+`mods/<lid>.dat` → bridge `goto_level` → wait for `[MOD] <lid>.dat` + `goto_done` → optional 4 s
+throttle ride → one screenshot, shown in the editor (~15 s). Command-line equivalent:
+```bash
+uv run --project mobile-modkit/mcp python tools/level-editor/push_to_game.py --dat X.dat --lid 1_25 --play
+```
+Tests: `~/.nvm/versions/node/*/bin/node --test tools/level-editor/tests/` (ref ops, synthetic) ·
+`python3 -m unittest discover -s tools/level-editor/tests -p 'test_*.py'` (types) ·
+`python3 tools/level-editor/tests/roundtrip_types.py --doc 1_25` (real level, local only).
+
 ## 3. Generate a procedural level
 ```bash
 python3 tools/level-editor/levelgen.py <seed> tools/level-editor/levels/5_1.level.json [length] [difficulty]

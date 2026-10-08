@@ -122,6 +122,27 @@
   #key{width:150px}
   #stat{margin-left:auto}
   #stat.ok{color:var(--axis-y)} #stat.err{color:var(--axis-x)} #stat.busy{color:var(--trigger)} #stat.dirty{color:var(--accent)}
+  /* lint panel */
+  .lint{border-top:1px solid var(--border-strong);max-height:38%;display:flex;flex-direction:column;flex:none}
+  .lint .ptitle{justify-content:space-between}
+  .lint .pscroll{max-height:none}
+  .iss{display:flex;gap:6px;padding:3px 8px;font-size:var(--fs-small);cursor:pointer;align-items:baseline}
+  .iss:hover{background:var(--hover-bg)}
+  .iss .sv{flex:none;width:14px;text-align:center}
+  .iss.error .sv{color:var(--axis-x)} .iss.warn .sv{color:var(--trigger)} .iss.info .sv{color:var(--text-faint)}
+  .iss.base{opacity:.55}
+  .iss .bt{color:var(--text-faint);font-size:10px;margin-left:auto;flex:none}
+  .lintsum{font-size:10px;color:var(--text-muted);font-weight:400;text-transform:none;letter-spacing:0}
+  /* modal */
+  .modal{position:fixed;inset:0;background:#0008;display:none;align-items:center;justify-content:center;z-index:10}
+  .modal.on{display:flex}
+  .mbox{background:var(--panel-bg);border:1px solid var(--border-strong);border-radius:6px;width:min(1000px,94vw);max-height:92vh;overflow:auto;padding:14px 16px}
+  .mbox h3{margin:0 0 8px;font-size:14px}
+  .mbox img{max-width:100%;border:1px solid var(--border);border-radius:4px;display:block;margin:8px 0}
+  .mbox pre{font:11px/1.45 var(--font-mono);background:var(--field-bg);padding:8px;border-radius:4px;white-space:pre-wrap;margin:6px 0}
+  .steps span{display:inline-block;margin:0 8px 4px 0;font-size:var(--fs-small)}
+  .ok{color:var(--axis-y)} .bad{color:var(--axis-x)}
+  .medals .f input{width:64px}
 </style>
 </head>
 <body>
@@ -129,12 +150,20 @@
   <!-- ── toolbar ── -->
   <div class="toolbar">
     <span class="brand">🜂 Revenant</span>
-    <select id="lvlSel" title="open level"></select>
+    <select id="lvlSel" title="open document"></select>
     <span class="sep"></span>
-    <button class="tool" id="tSelect" title="Select (Q)" onclick="setTool('select')">⮰</button>
-    <button class="tool" id="tMove" title="Move (W)" onclick="setTool('move')">✥</button>
+    <button class="tool" id="tSelect" title="Select (Q) — shift-click to multi-select" onclick="setTool('select')">⮰</button>
+    <button class="tool" id="tMove" title="Move (W) — moves the selection with its children" onclick="setTool('move')">✥</button>
     <button class="tool" id="tRotate" title="Rotate (E)" onclick="setTool('rotate')">↻</button>
     <button class="tool" id="tPan" title="Pan (Space)" onclick="setTool('pan')">✋</button>
+    <button class="tool" id="tDraw" title="Draw terrain (T): click points, Enter/double-click to finish, Esc to cancel" onclick="setTool('draw')">✎</button>
+    <span class="sep"></span>
+    <button class="tool" id="bUndo" title="Undo (Ctrl+Z)" onclick="undo()">↶</button>
+    <button class="tool" id="bRedo" title="Redo (Ctrl+Shift+Z)" onclick="redo()">↷</button>
+    <button class="tool" id="bDup" title="Duplicate (Ctrl+D)" onclick="duplicateSel()">⧉</button>
+    <button class="tool" id="bCopy" title="Copy (Ctrl+C) — pastes into any level" onclick="copySel()">⎘</button>
+    <button class="tool" id="bPaste" title="Paste (Ctrl+V) at the cursor" onclick="pasteClip()">📋</button>
+    <button class="tool" id="bDel" title="Delete (Del) — with its children + joints, refs remapped" onclick="delEntity()">🗑</button>
     <span class="sep"></span>
     <button class="tool" id="bGrid" title="Toggle grid" onclick="toggleGrid()">▦</button>
     <button class="tool" id="bSnap" title="Grid snap" onclick="toggleSnap()">⊞</button>
@@ -143,9 +172,12 @@
     <span class="sep"></span>
     <label style="font-size:11px;color:var(--text-muted)" title="sprite content-scale (texels→units); tune to match the green outline">scale<input type="number" id="cscale" value="8.5" step="0.5" min="0.5" style="width:48px;margin-left:4px" oninput="SPRITE_CS=Math.max(0.1,+this.value)||8.5;draw()"></label>
     <span class="grow"></span>
-    <input id="key" type="password" placeholder="level key (hex)" title="needed to Export; stored locally, never committed">
+    <input id="key" type="password" placeholder="level key (hex)" title="needed once to Export; stored locally, never committed">
     <button id="saveBtn" onclick="save()" disabled>Save</button>
+    <button id="lintBtn" onclick="runLint(true)">Lint</button>
     <button id="exportBtn" onclick="exportDat()">Export .dat</button>
+    <button id="pushBtn" onclick="pushToGame()" title="Save → lint → export → push mods/<lid>.dat → goto_level → verify → screenshot">▶ Push to game</button>
+    <label style="font-size:11px;color:var(--text-muted)" title="after loading, hold throttle 4 s and check the race runs"><input type="checkbox" id="pushPlay" checked> ride</label>
     <span class="sep"></span>
     <button class="tool" id="bTheme" title="Toggle theme" onclick="toggleTheme()">◐</button>
   </div>
@@ -165,10 +197,14 @@
   </div>
   <div class="splitter rs" id="rsplit"></div>
 
-  <!-- ── inspector ── -->
+  <!-- ── inspector + lint ── -->
   <div class="right">
     <div class="ptitle">Inspector</div>
     <div class="pscroll" id="insp"><div class="insp-empty">No selection</div></div>
+    <div class="lint" id="lintPanel">
+      <div class="ptitle">Lint <span class="lintsum" id="lintSum">not run</span></div>
+      <div class="pscroll" id="lintList"></div>
+    </div>
   </div>
 
   <!-- ── status bar ── -->
@@ -180,9 +216,12 @@
     <span class="seg" id="stat">ready</span>
   </div>
 </div>
+<div class="modal" id="modal" onclick="if(event.target===this)closeModal()"><div class="mbox" id="mbox"></div></div>
+<script src="/levelops.js"></script>
 <script>
 const $=s=>document.querySelector(s);
 const cv=$('#cv'), ctx=cv.getContext('2d');
+const L=window.LevelOps;
 
 // ── type metadata ────────────────────────────────────────────────────────────
 const TYPEMETA={
@@ -199,14 +238,18 @@ function groupOf(e){return metaFor(e.Type).group;}
 function nameOf(e){const n=(e.Properties||{}).name; return (n&&String(n).trim())?n:`${e.Type} #${e._id}`;}
 
 // ── state ────────────────────────────────────────────────────────────────────
-let LID=null,LEVEL=null,ENTS=[],selected=null,dirty=false;
+// ENTS[i]._id === i always (renumber() after structural edits); __src = row in the LAST TYPED save
+// (the server restores int/real types from it). selSet holds _ids; `selected` is the primary.
+let DOC=null,LEVEL=null,ENTS=[],selected=null,selSet=new Set(),dirty=false;
 let view={x:0,y:0,scale:1}, tool='select';
 let showGrid=true, snap=false, snapStep=20, showArt=true;
 let SPRITE_CS=8.5;   // atlas content-scale: texels → level units. Calibrated by eye
                      // against the green outline (≈8.5). Live-tunable via the toolbar.
-let hidden=new Set(), collapsed=new Set(BIG_GROUPS), foldOpen={Transform:true,Identity:true,Physics:true,Appearance:true,'Type-specific':true,Vertexes:true};
-let KEYS={}, FRAMES={}, ATLAS={};   // atlas frame meta + Image objects
+let hidden=new Set(), collapsed=new Set(BIG_GROUPS), foldOpen={Transform:true,Identity:true,Physics:true,Appearance:true,'Type-specific':true,Vertexes:true,Level:true};
+let HAVEKEY=false, FRAMES={}, ATLAS={};   // atlas frame meta + Image objects
 let FILLTEX={};                      // terrain fill textures (name → Image)
+let BASELINE=new Set();              // lint issues already present in the document as loaded
+let LINT=[];
 const LS=k=>'rvedit_'+k;
 
 // ── coords ───────────────────────────────────────────────────────────────────
@@ -218,10 +261,6 @@ function posOf(e){const P=e.Properties||{};
   if(e.Vertexes&&e.Vertexes.length){let sx=0,sy=0;e.Vertexes.forEach(v=>{sx+=v.x;sy+=v.y});return{x:sx/e.Vertexes.length,y:sy/e.Vertexes.length};}
   if(Array.isArray(e.Anchors)&&e.Anchors.length)return{x:e.Anchors[0].x,y:e.Anchors[0].y};
   return null;}
-function translate(e,dx,dy){
-  if(e.Vertexes)e.Vertexes.forEach(v=>{v.x+=dx;v.y+=dy;});
-  const P=e.Properties||{}; if(Array.isArray(P.position)){P.position[0]+=dx;P.position[1]+=dy;}
-  if(Array.isArray(e.Anchors))e.Anchors.forEach(a=>{a.x+=dx;a.y+=dy;});}
 function entBounds(e){let mnx=1e9,mny=1e9,mxx=-1e9,mxy=-1e9,any=false;const acc=(x,y)=>{any=true;mnx=Math.min(mnx,x);mny=Math.min(mny,y);mxx=Math.max(mxx,x);mxy=Math.max(mxy,y);};
   (e.Vertexes||[]).forEach(v=>acc(v.x,v.y)); const pt=posOf(e); if(pt&&!e.Vertexes)acc(pt.x,pt.y); (e.Anchors||[]).forEach(a=>acc(a.x,a.y));
   if(!any){const p=posOf(e)||{x:0,y:0};return{mnx:p.x-20,mny:p.y-20,mxx:p.x+20,mxy:p.y+20};} return{mnx,mny,mxx,mxy};}
@@ -244,13 +283,14 @@ function draw(){
   const W=cv.width,H=cv.height; ctx.clearRect(0,0,W,H);
   ctx.fillStyle=css('--viewport-bg'); ctx.fillRect(0,0,W,H);
   if(showGrid)drawGrid();
-  // sprites (real art) sorted by z, behind terrain
   if(showArt) ENTS.filter(e=>!hidden.has(e._id)&&metaFor(e.Type).group==='Sprites').sort((a,b)=>((a.Properties||{}).z||0)-((b.Properties||{}).z||0)).forEach(drawSprite);
   ENTS.forEach(e=>{ if(hidden.has(e._id))return; const g=metaFor(e.Type).group;
     if(g==='Terrain')drawTerrain(e); else if(g==='Triggers')drawTrigger(e); else if(g==='Joints')drawJoint(e);
     else if(g==='Gameplay'||g==='Cameras'||g==='Misc')drawMarker(e);
     else if(g==='Sprites'&&!showArt)drawSpriteDot(e); });
+  selSet.forEach(id=>{const e=ENTS[id]; if(e&&e!==selected)drawSelBox(e);});
   if(selected)drawGizmo(selected);
+  if(tool==='draw')drawDraft();
 }
 function drawGrid(){const b=s2w(0,0),e=s2w(cv.width,cv.height);
   let step=Math.pow(10,Math.floor(Math.log10((e.x-b.x)/10)));if(!isFinite(step)||step<=0)step=100;
@@ -260,9 +300,8 @@ function drawGrid(){const b=s2w(0,0),e=s2w(cv.width,cv.height);
   draw1(step,css('--grid-minor')); draw1(step*5,css('--grid-major'));}
 function drawSprite(e){const P=e.Properties||{},pt=posOf(e);if(!pt)return;const fm=FRAMES[P.frame],img=fm&&ATLAS[fm.atlas];
   if(!fm||!img||!img.complete||!img.naturalWidth){return drawSpriteDot(e);}
-  const [rx,ry,rw,rh]=fm.rect; const sw=fm.source[0]||rw, sh=fm.source[1]||rh;
+  const [rx,ry,rw,rh]=fm.rect;
   // The game is cocos2d: Y-UP, rotation CLOCKWISE-positive. Our canvas is Y-DOWN.
-  // Map a texel-space quad to screen via  S(k,-k)·R_cw(ang)  (k = texel→screen).
   const ox=(fm.offset&&fm.offset[0])||0, oy=(fm.offset&&fm.offset[1])||0;
   const k=view.scale*(P.scale||1)/SPRITE_CS, a=(P.rotation||0)*Math.PI/180;
   const c=Math.cos(a), s=Math.sin(a);
@@ -271,14 +310,13 @@ function drawSprite(e){const P=e.Properties||{},pt=posOf(e);if(!pt)return;const 
   ctx.transform(k*c, k*s, k*s, -k*c, 0, 0);   // world Y-flip + cocos CW rotation; frame is Y-up, texel units
   ctx.globalAlpha=(P.opacity!=null?P.opacity:1);
   ctx.translate(ox, oy);                       // trim offset: trimmed region is shifted from sprite center
-  // draw the trimmed atlas region at its NATURAL size (rw×rh), V-flipped (image rows top-down vs Y-up)
   if(fm.rotated){ ctx.rotate(Math.PI/2); ctx.drawImage(img,rx,ry,rw,rh,-rw/2,rh/2,rw,-rh); }
   else { ctx.drawImage(img,rx,ry,rw,rh,-rw/2,rh/2,rw,-rh); }
   ctx.restore();}
 function drawSpriteDot(e){const pt=posOf(e);if(!pt)return;ctx.fillStyle=css('--sprite');ctx.beginPath();ctx.arc(wx(pt.x),wy(pt.y),2.5,0,7);ctx.fill();}
 function drawTerrain(e){if(e.Type==='EditorPhysicsEntity')return drawMarker(e);const poly=outline(e);if(!poly)return;
   const path=()=>{ctx.beginPath();poly.forEach((p,i)=>i?ctx.lineTo(wx(p.x),wy(p.y)):ctx.moveTo(wx(p.x),wy(p.y)));ctx.closePath();};
-  const filled=fillTerrain(e,poly);          // tiled ground texture (if it has one)
+  const filled=fillTerrain(e,poly);
   path();
   if(!filled){ctx.fillStyle=css('--terrain')+'22';ctx.fill();}
   ctx.lineWidth=filled?1:1.4; ctx.strokeStyle=css('--terrain')+(filled?'66':'');ctx.stroke();}
@@ -288,7 +326,7 @@ function fillTerrain(e,poly){
   ctx.save();
   ctx.beginPath();poly.forEach((p,i)=>i?ctx.lineTo(wx(p.x),wy(p.y)):ctx.moveTo(wx(p.x),wy(p.y)));ctx.closePath();ctx.clip();
   const pat=ctx.createPattern(img,'repeat');
-  const sps=view.scale/SPRITE_CS*(P.fillTile||1);     // screen px per texel
+  const sps=view.scale/SPRITE_CS*(P.fillTile||1);
   const m=new DOMMatrix();m.translateSelf(wx(0),wy(0));m.rotateSelf(P.textureRot||0);m.scaleSelf(sps,sps);
   try{pat.setTransform(m);}catch(_){}
   ctx.fillStyle=pat;
@@ -318,58 +356,146 @@ function drawMarker(e){const pt=posOf(e);if(!pt)return;const sx=wx(pt.x),sy=wy(p
   ctx.font='15px '+css('--font-ui');ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(g,sx,sy);
   ctx.textAlign='left';ctx.textBaseline='alphabetic';
   if(label){ctx.fillStyle=css('--marker');ctx.font='bold 10px '+css('--font-ui');ctx.fillText(label,sx+9,sy-6);}}
+function drawSelBox(e){const b=entBounds(e);ctx.strokeStyle=css('--accent');ctx.lineWidth=1;ctx.setLineDash([3,3]);
+  ctx.strokeRect(wx(b.mnx)-3,wy(b.mxy)-3,(b.mxx-b.mnx)*view.scale+6,(b.mxy-b.mny)*view.scale+6);ctx.setLineDash([]);}
 function drawGizmo(e){const pt=posOf(e);if(!pt)return;const sx=wx(pt.x),sy=wy(pt.y);const acc=css('--accent');
   const poly=outline(e);
   if(poly&&metaFor(e.Type).group==='Terrain'){ctx.strokeStyle=acc;ctx.lineWidth=2;ctx.beginPath();poly.forEach((p,i)=>i?ctx.lineTo(wx(p.x),wy(p.y)):ctx.moveTo(wx(p.x),wy(p.y)));ctx.closePath();ctx.stroke();
-    (e.Vertexes||[]).forEach((v,i)=>{ctx.fillStyle=(i===hoverVtx)?css('--trigger'):acc;ctx.beginPath();ctx.arc(wx(v.x),wy(v.y),4,0,7);ctx.fill();});}
-  else{const b=entBounds(e);ctx.strokeStyle=acc;ctx.lineWidth=1.5;ctx.strokeRect(wx(b.mnx)-3,wy(b.mxy)-3,(b.mxx-b.mnx)*view.scale+6,(b.mxy-b.mny)*view.scale+6);}
-  // move gizmo (red X / green Y axes) + center
-  if(tool==='move'||tool==='select'){const L=46;
-    ctx.lineWidth=2;ctx.strokeStyle=css('--axis-x');ctx.beginPath();ctx.moveTo(sx,sy);ctx.lineTo(sx+L,sy);ctx.stroke();
-    ctx.fillStyle=css('--axis-x');ctx.beginPath();ctx.moveTo(sx+L,sy-4);ctx.lineTo(sx+L+7,sy);ctx.lineTo(sx+L,sy+4);ctx.fill();
-    ctx.strokeStyle=css('--axis-y');ctx.beginPath();ctx.moveTo(sx,sy);ctx.lineTo(sx,sy-L);ctx.stroke();
-    ctx.fillStyle=css('--axis-y');ctx.beginPath();ctx.moveTo(sx-4,sy-L);ctx.lineTo(sx,sy-L-7);ctx.lineTo(sx+4,sy-L);ctx.fill();
+    const vs=e.Vertexes||[];
+    if((e.Properties||{}).spline&&vs.length>1){ctx.setLineDash([4,4]);ctx.lineWidth=1;ctx.beginPath();vs.forEach((v,i)=>i?ctx.lineTo(wx(v.x),wy(v.y)):ctx.moveTo(wx(v.x),wy(v.y)));ctx.closePath();ctx.stroke();ctx.setLineDash([]);}
+    vs.forEach((v,i)=>{ctx.fillStyle=(i===hoverVtx)?css('--trigger'):acc;ctx.beginPath();ctx.arc(wx(v.x),wy(v.y),4,0,7);ctx.fill();});
+    if(hoverEdge){ctx.fillStyle=css('--trigger');ctx.beginPath();ctx.arc(wx(hoverEdge.x),wy(hoverEdge.y),3.5,0,7);ctx.fill();}}
+  else drawSelBox(e);
+  if(tool==='move'||tool==='select'){const Lx=46;
+    ctx.lineWidth=2;ctx.strokeStyle=css('--axis-x');ctx.beginPath();ctx.moveTo(sx,sy);ctx.lineTo(sx+Lx,sy);ctx.stroke();
+    ctx.fillStyle=css('--axis-x');ctx.beginPath();ctx.moveTo(sx+Lx,sy-4);ctx.lineTo(sx+Lx+7,sy);ctx.lineTo(sx+Lx,sy+4);ctx.fill();
+    ctx.strokeStyle=css('--axis-y');ctx.beginPath();ctx.moveTo(sx,sy);ctx.lineTo(sx,sy-Lx);ctx.stroke();
+    ctx.fillStyle=css('--axis-y');ctx.beginPath();ctx.moveTo(sx-4,sy-Lx);ctx.lineTo(sx,sy-Lx-7);ctx.lineTo(sx+4,sy-Lx);ctx.fill();
     ctx.fillStyle=acc;ctx.fillRect(sx-3,sy-3,6,6);}
   if(tool==='rotate'){ctx.strokeStyle=acc;ctx.lineWidth=1.5;ctx.beginPath();ctx.arc(sx,sy,42,0,7);ctx.stroke();}}
+function drawDraft(){if(!draft.length)return;ctx.strokeStyle=css('--terrain');ctx.lineWidth=1.5;ctx.setLineDash([5,3]);ctx.beginPath();
+  draft.forEach((p,i)=>i?ctx.lineTo(wx(p.x),wy(p.y)):ctx.moveTo(wx(p.x),wy(p.y)));if(draftHover)ctx.lineTo(wx(draftHover.x),wy(draftHover.y));ctx.stroke();ctx.setLineDash([]);
+  draft.forEach(p=>{ctx.fillStyle=css('--terrain');ctx.beginPath();ctx.arc(wx(p.x),wy(p.y),3.5,0,7);ctx.fill();});}
+
+// ── undo / redo (snapshot stack) ─────────────────────────────────────────────────
+let UNDO=[], REDO=[], lastUndoTag=null, lastUndoT=0;
+function snapshot(){return JSON.stringify({ents:ENTS,times:LEVEL.times,lid:LEVEL.lid});}
+function pushUndo(tag){const t=Date.now();
+  if(tag&&tag===lastUndoTag&&t-lastUndoT<800){lastUndoT=t;return;}   // coalesce a burst of the same edit
+  UNDO.push(snapshot());if(UNDO.length>200)UNDO.shift();REDO=[];lastUndoTag=tag||null;lastUndoT=t;updUndo();}
+function restore(s){const d=JSON.parse(s);ENTS=d.ents;LEVEL.times=d.times;LEVEL.lid=d.lid;renumber();
+  const keep=new Set([...selSet].filter(id=>id<ENTS.length));selSet=keep;selected=selected&&ENTS[selected._id]||null;
+  if(selected&&!selSet.has(selected._id))selected=null;markDirty();renderAll();}
+function undo(){if(!UNDO.length)return;REDO.push(snapshot());restore(UNDO.pop());lastUndoTag=null;updUndo();setStat('undo','');}
+function redo(){if(!REDO.length)return;UNDO.push(snapshot());restore(REDO.pop());lastUndoTag=null;updUndo();setStat('redo','');}
+function updUndo(){$('#bUndo').disabled=!UNDO.length;$('#bRedo').disabled=!REDO.length;}
+function renumber(){ENTS.forEach((e,i)=>e._id=i);}
+
+// ── selection helpers ────────────────────────────────────────────────────────────
+function selIdx(){return [...selSet].filter(i=>i>=0&&i<ENTS.length);}
+function selectEnt(e,fromTree,additive){
+  if(additive&&e){if(selSet.has(e._id)){selSet.delete(e._id);if(selected===e)selected=selSet.size?ENTS[[...selSet][selSet.size-1]]:null;}else{selSet.add(e._id);selected=e;}}
+  else{selSet=new Set(e?[e._id]:[]);selected=e;}
+  hoverEdge=null;renderInspector();updSel();
+  if(!fromTree)syncTreeSelection(); else renderTree(); draw();}
 
 // ── interaction ────────────────────────────────────────────────────────────────
-let down=false,last=null,moved=0,mode=null,dragVtx=-1,hoverVtx=-1,axis=null,rotStart=0;
+let down=false,last=null,moved=0,armed=false,downAt=null,mode=null,dragVtx=-1,hoverVtx=-1,hoverEdge=null,axis=null,rotStart=0,moveIds=null,dragSnap=null;
+let draft=[], draftHover=null, mouseW={x:0,y:0};
 function localM(ev){const r=cv.getBoundingClientRect();return{x:ev.clientX-r.left,y:ev.clientY-r.top};}
 function vertexAt(e,m){if(!e||!e.Vertexes)return -1;for(let i=0;i<e.Vertexes.length;i++){const v=e.Vertexes[i];const dx=wx(v.x)-m.x,dy=wy(v.y)-m.y;if(dx*dx+dy*dy<=36)return i;}return -1;}
-function axisAt(e,m){if(!e)return null;const pt=posOf(e);if(!pt)return null;const sx=wx(pt.x),sy=wy(pt.y),L=46;
-  if(m.x>=sx+4&&m.x<=sx+L+8&&Math.abs(m.y-sy)<=5)return 'x';
-  if(m.y<=sy-4&&m.y>=sy-L-8&&Math.abs(m.x-sx)<=5)return 'y';
+function edgeAt(e,m){if(!e||!e.Vertexes||e.Vertexes.length<2||metaFor(e.Type).group!=='Terrain')return null;
+  const near=L.nearestEdge(e.Vertexes,s2w(m.x,m.y));return near&&near.d*view.scale<=6?near:null;}
+function axisAt(e,m){if(!e)return null;const pt=posOf(e);if(!pt)return null;const sx=wx(pt.x),sy=wy(pt.y),Lx=46;
+  if(m.x>=sx+4&&m.x<=sx+Lx+8&&Math.abs(m.y-sy)<=5)return 'x';
+  if(m.y<=sy-4&&m.y>=sy-Lx-8&&Math.abs(m.x-sx)<=5)return 'y';
   if(Math.abs(m.x-sx)<=5&&Math.abs(m.y-sy)<=5)return 'free'; return null;}
 function pick(m){let best=null,bd=14*14;ENTS.forEach(ent=>{if(hidden.has(ent._id))return;const pt=posOf(ent);if(!pt)return;const dx=wx(pt.x)-m.x,dy=wy(pt.y)-m.y,d=dx*dx+dy*dy;if(d<bd){bd=d;best=ent;}});
   if(!best){for(const ent of ENTS){if(hidden.has(ent._id)||metaFor(ent.Type).group!=='Terrain')continue;const poly=outline(ent);if(poly&&pointIn(poly,m)){best=ent;break;}}}return best;}
 function pointIn(poly,m){let inside=false;for(let i=0,j=poly.length-1;i<poly.length;j=i++){const xi=wx(poly[i].x),yi=wy(poly[i].y),xj=wx(poly[j].x),yj=wy(poly[j].y);if(((yi>m.y)!==(yj>m.y))&&(m.x<(xj-xi)*(m.y-yi)/(yj-yi)+xi))inside=!inside;}return inside;}
+function snapPt(p){return snap?{x:Math.round(p.x/snapStep)*snapStep,y:Math.round(p.y/snapStep)*snapStep}:p;}
 let spaceDown=false;
 window.addEventListener('keydown',e=>{if(e.target.tagName==='INPUT'||e.target.tagName==='SELECT')return;
+  const mod=e.ctrlKey||e.metaKey;
+  if(mod&&e.key.toLowerCase()==='z'){e.preventDefault();if(e.shiftKey)redo();else undo();return;}
+  if(mod&&e.key.toLowerCase()==='y'){e.preventDefault();redo();return;}
+  if(mod&&e.key.toLowerCase()==='d'){e.preventDefault();duplicateSel();return;}
+  if(mod&&e.key.toLowerCase()==='c'){e.preventDefault();copySel();return;}
+  if(mod&&e.key.toLowerCase()==='v'){e.preventDefault();pasteClip();return;}
+  if(mod&&e.key.toLowerCase()==='s'){e.preventDefault();save();return;}
   if(e.code==='Space'){spaceDown=true;e.preventDefault();}
-  else if(e.key==='q')setTool('select');else if(e.key==='w')setTool('move');else if(e.key==='e')setTool('rotate');
+  else if(tool==='draw'&&e.key==='Enter'){finishDraft();}
+  else if(e.key==='Escape'){if(tool==='draw'){draft=[];draw();}else selectEnt(null);}
+  else if(e.key==='q')setTool('select');else if(e.key==='w')setTool('move');else if(e.key==='e')setTool('rotate');else if(e.key==='t')setTool('draw');
   else if(e.key==='f')frameSel();else if(e.key==='a')frameAll();
-  else if((e.key==='Delete'||e.key==='Backspace')&&selected)delEntity();});
+  else if((e.key==='Delete'||e.key==='Backspace')&&selSet.size)delEntity();});
 window.addEventListener('keyup',e=>{if(e.code==='Space')spaceDown=false;});
-cv.addEventListener('mousedown',ev=>{down=true;moved=0;last={x:ev.clientX,y:ev.clientY};const m=localM(ev);
+cv.addEventListener('dblclick',()=>{if(tool==='draw')finishDraft();});
+cv.addEventListener('mousedown',ev=>{down=true;moved=0;armed=false;last={x:ev.clientX,y:ev.clientY};downAt={x:ev.clientX,y:ev.clientY};const m=localM(ev);
   if(spaceDown||tool==='pan'){mode='pan';return;}
-  dragVtx=vertexAt(selected,m); if(dragVtx>=0){mode='vertex';return;}
-  if(selected&&(tool==='move'||tool==='select')){const a=axisAt(selected,m);if(a){mode='move';axis=a;return;}}
-  if(selected&&tool==='rotate'){const pt=posOf(selected);rotStart=Math.atan2(m.y-wy(pt.y),m.x-wx(pt.x));mode='rotate';return;}
+  if(tool==='draw'){const p=snapPt(s2w(m.x,m.y));const lp=draft[draft.length-1];if(!lp||Math.hypot(lp.x-p.x,lp.y-p.y)*view.scale>4)draft.push(p);mode=null;draw();return;}
+  // Move tool: the gizmo wins (a vertex can sit exactly on the entity's position — VERIFIED on 1_25 #84);
+  // Select tool: vertex/edge editing wins.
+  if(selected&&tool==='move'){const a=axisAt(selected,m);if(a){mode='move';axis=a;moveIds=L.moveSet(ENTS,selIdx());dragSnap=snapshot();return;}}
+  const vi=vertexAt(selected,m);
+  if(vi>=0&&ev.altKey){if(selected.Vertexes.length>3){pushUndo();L.deleteVertex(selected,vi);hoverVtx=-1;markDirty();renderInspector();draw();setStat('vertex deleted','');}else setStat('✗ a polygon needs ≥ 3 vertices','err');mode=null;return;}
+  if(vi>=0){dragVtx=vi;dragSnap=snapshot();mode='vertex';return;}
+  const edge=!ev.altKey&&edgeAt(selected,m);
+  if(edge){pushUndo();dragVtx=L.insertVertex(selected,edge.edge,edge.x,edge.y);hoverEdge=null;dragSnap=null;mode='vertex';markDirty();renderInspector();draw();setStat('vertex inserted','');return;}
+  if(selected&&(tool==='move'||tool==='select')){const a=axisAt(selected,m);if(a){mode='move';axis=a;moveIds=L.moveSet(ENTS,selIdx());dragSnap=snapshot();return;}}
+  if(selected&&tool==='rotate'){const pt=posOf(selected);rotStart=Math.atan2(m.y-wy(pt.y),m.x-wx(pt.x));mode='rotate';dragSnap=snapshot();return;}
   const hit=pick(m);
-  if(hit){selectEnt(hit,false);mode=(tool==='move'||tool==='rotate')?tool:'select';axis='free';
-    if(tool==='rotate'){const pt=posOf(hit);rotStart=Math.atan2(m.y-wy(pt.y),m.x-wx(pt.x));}}
+  if(hit){const additive=ev.shiftKey;if(!(selSet.has(hit._id)&&!additive))selectEnt(hit,false,additive);
+    mode=(tool==='move'||tool==='rotate')?tool:'select';axis='free';
+    if(mode==='move'||mode==='select'){moveIds=L.moveSet(ENTS,selIdx());dragSnap=snapshot();if(mode==='select')mode='move';}
+    if(tool==='rotate'){const pt=posOf(hit);rotStart=Math.atan2(m.y-wy(pt.y),m.x-wx(pt.x));dragSnap=snapshot();}}
   else{mode='pan';}});
-window.addEventListener('mouseup',()=>{if(down&&mode==='pan'&&moved<4&&tool!=='pan'&&!spaceDown){selectEnt(null);}if((mode==='vertex'||mode==='move'||mode==='rotate')&&moved>3)markDirty();down=false;mode=null;dragVtx=-1;axis=null;});
-window.addEventListener('mousemove',ev=>{const m=localM(ev),w=s2w(m.x,m.y);
+window.addEventListener('mouseup',()=>{
+  if(down&&mode==='pan'&&moved<4&&tool!=='pan'&&!spaceDown&&tool!=='draw'){selectEnt(null);}
+  if((mode==='vertex'||mode==='move'||mode==='rotate')&&moved>3){if(dragSnap){UNDO.push(dragSnap);REDO=[];lastUndoTag=null;updUndo();}markDirty();renderInspector();}
+  down=false;mode=null;dragVtx=-1;axis=null;moveIds=null;dragSnap=null;});
+window.addEventListener('mousemove',ev=>{const m=localM(ev),w=s2w(m.x,m.y);mouseW=w;
   $('#sCur').textContent=`${w.x.toFixed(0)}, ${w.y.toFixed(0)}`;$('#hud').textContent=`${w.x.toFixed(0)}, ${w.y.toFixed(0)}`;
-  if(!down){const hv=vertexAt(selected,m);if(hv!==hoverVtx){hoverVtx=hv;draw();}return;}
-  const dx=ev.clientX-last.x,dy=ev.clientY-last.y;moved+=Math.abs(dx)+Math.abs(dy);let dwx=dx/view.scale,dwy=-dy/view.scale;
+  if(tool==='draw'){draftHover=snapPt(w);if(!down){draw();return;}}
+  if(!down){const hv=vertexAt(selected,m);const he=hv<0?edgeAt(selected,m):null;
+    if(hv!==hoverVtx||(!!he)!==(!!hoverEdge)||(he&&hoverEdge&&(he.x!==hoverEdge.x))){hoverVtx=hv;hoverEdge=he;draw();}return;}
+  let dx=ev.clientX-last.x,dy=ev.clientY-last.y;moved+=Math.abs(dx)+Math.abs(dy);
+  // edits arm only after >3 px of travel (a click to select must never nudge geometry); on arming,
+  // apply the whole delta from the press point so nothing is lost
+  if(mode!=='pan'&&!armed){if(moved<=3){return;}armed=true;dx=ev.clientX-downAt.x;dy=ev.clientY-downAt.y;}
+  let dwx=dx/view.scale,dwy=-dy/view.scale;
   if(mode==='pan'){view.x-=dwx;view.y-=dwy;}
   else if(mode==='vertex'&&selected){const v=selected.Vertexes[dragVtx];v.x+=dwx;v.y+=dwy;if(snap){v.x=Math.round(v.x/snapStep)*snapStep;v.y=Math.round(v.y/snapStep)*snapStep;}}
-  else if(mode==='move'&&selected){if(axis==='x')dwy=0;if(axis==='y')dwx=0;translate(selected,dwx,dwy);if(selected.Properties&&Array.isArray(selected.Properties.position))refreshInspectorVals();}
-  else if(mode==='rotate'&&selected){const pt=posOf(selected);const ang=Math.atan2(m.y-wy(pt.y),m.x-wx(pt.x));let dd=(ang-rotStart)*180/Math.PI;rotStart=ang;const P=selected.Properties||{};P.rotation=((P.rotation||0)+dd);refreshInspectorVals();}
+  else if(mode==='move'&&moveIds){if(axis==='x')dwy=0;if(axis==='y')dwx=0;moveIds.forEach(i=>L.translateEntity(ENTS[i],dwx,dwy));}
+  else if(mode==='rotate'&&selected){const pt=posOf(selected);const ang=Math.atan2(m.y-wy(pt.y),m.x-wx(pt.x));let dd=(ang-rotStart)*180/Math.PI;rotStart=ang;const P=selected.Properties||{};P.rotation=((P.rotation||0)+dd);}
   last={x:ev.clientX,y:ev.clientY};draw();});
 cv.addEventListener('wheel',ev=>{ev.preventDefault();const m=localM(ev),before=s2w(m.x,m.y);view.scale*=ev.deltaY<0?1.1:1/1.1;const after=s2w(m.x,m.y);view.x+=before.x-after.x;view.y+=before.y-after.y;updZoom();draw();},{passive:false});
+
+// ── structural edits (all through LevelOps so refs stay valid) ──────────────────────
+function delEntity(){const sel=selIdx();if(!sel.length)return;
+  const plan=L.deletePlan(ENTS,sel);
+  const list=Object.entries(plan.byType).map(([t,c])=>`  ${c} × ${t}`).join('\n');
+  if(!confirm(`Delete ${plan.count} entit${plan.count===1?'y':'ies'}?\n\n${list}\n\n(the selection, its children / mounted sprites, and every joint on a removed body; all other references are remapped)`))return;
+  pushUndo();const r=L.applyDelete(ENTS,plan.remove);ENTS=r.ents;renumber();hidden=new Set();
+  selected=null;selSet=new Set();markDirty();renderAll();setStat(`deleted ${plan.count}`,'ok');}
+function duplicateSel(){const sel=selIdx();if(!sel.length)return;pushUndo();
+  const prim=selected?selected._id:sel[0];const r=L.duplicate(ENTS,sel,40,0);renumber();
+  selSet=new Set(r.added);selected=ENTS[r.map.get(prim)]||ENTS[r.added[0]];markDirty();renderAll();setStat(`duplicated ${r.added.length} (children + internal joints, refs → copies)`,'ok');}
+function copySel(){const sel=selIdx();if(!sel.length)return;
+  const clean=ENTS.map(({_id,__src,...e})=>e);const clip=L.copyToClipboard(clean,sel,LEVEL.lid);
+  const pts=clip.entities.map(posOf).filter(Boolean);clip.anchor=pts.length?{x:pts.reduce((s,p)=>s+p.x,0)/pts.length,y:pts.reduce((s,p)=>s+p.y,0)/pts.length}:{x:0,y:0};
+  try{localStorage.setItem(LS('clipboard'),JSON.stringify(clip));}catch(_){}
+  setStat(`copied ${clip.entities.length}${clip.dropped?` (${clip.dropped} outside links dropped)`:''}`,'ok');}
+function pasteClip(){let clip;try{clip=JSON.parse(localStorage.getItem(LS('clipboard'))||'null');}catch(_){clip=null;}
+  if(!clip||!clip.entities||!clip.entities.length){setStat('✗ clipboard empty','err');return;}
+  pushUndo();const a=clip.anchor||{x:0,y:0};const r=L.paste(ENTS,clip,mouseW.x-a.x,mouseW.y-a.y);renumber();
+  selSet=new Set(r.added);selected=ENTS[r.added[0]];markDirty();renderAll();setStat(`pasted ${r.added.length} from ${clip.srcLid||'?'}`,'ok');}
+function finishDraft(){if(draft.length<3){setStat('✗ draw at least 3 points','err');return;}
+  const tpl=L.terrainTemplate(ENTS);if(!tpl){setStat('✗ no terrain object in this level to copy properties from','err');return;}
+  pushUndo();const n=ENTS.filter(e=>String((e.Properties||{}).name||'').startsWith('Terrain_new')).length+1;
+  const t=L.makeTerrain(tpl,draft,'Terrain_new_'+n);delete t.__src;t.__src=tpl.__src;
+  ENTS.push(t);renumber();draft=[];selSet=new Set([t._id]);selected=t;setTool('select');markDirty();renderAll();setStat(`terrain added (${t.Vertexes.length} pts, props from "${(tpl.Properties||{}).name}")`,'ok');}
+function reverseSel(){if(!selected||!selected.Vertexes)return;pushUndo();L.reverseWinding(selected);markDirty();renderAll();}
 
 // ── hierarchy ──────────────────────────────────────────────────────────────────
 function renderTree(){
@@ -386,48 +512,58 @@ function renderTree(){
     const gh=document.createElement('div');gh.className='ghead';gh.innerHTML=`<span class="tri">${isOpen?'▼':'▶'}</span><span class="gname">${g}</span><span class="gcount">${shown.length}</span>`;
     gh.onclick=()=>{if(collapsed.has(g))collapsed.delete(g);else collapsed.add(g);renderTree();};
     gd.appendChild(gh);
-    if(isOpen)shown.forEach(e=>{const r=document.createElement('div');r.className='row'+(e===selected?' sel':'')+(hidden.has(e._id)?' hidden':'');r.dataset.id=e._id;
-      r.innerHTML=`<span class="ico">${metaFor(e.Type).icon}</span><span class="nm">${escapeHtml(nameOf(e))}</span><span class="eye">${hidden.has(e._id)?'🚫':'👁'}</span>`;
-      r.onclick=ev=>{if(ev.target.classList.contains('eye')){toggleHide(e);return;}selectEnt(e,true);};
+    if(isOpen)shown.forEach(e=>{const r=document.createElement('div');r.className='row'+(selSet.has(e._id)?' sel':'')+(hidden.has(e._id)?' hidden':'');r.dataset.id=e._id;
+      const kids=L.ownedChildren(e).length;
+      r.innerHTML=`<span class="ico">${metaFor(e.Type).icon}</span><span class="nm">${escapeHtml(nameOf(e))}${kids?` <span style="color:var(--text-faint)">(${kids})</span>`:''}</span><span class="eye">${hidden.has(e._id)?'🚫':'👁'}</span>`;
+      r.onclick=ev=>{if(ev.target.classList.contains('eye')){toggleHide(e);return;}selectEnt(e,true,ev.shiftKey);};
       r.ondblclick=()=>{selectEnt(e,false);frameSel();};
       gd.appendChild(r);});
     tree.appendChild(gd);});
 }
 function escapeHtml(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 function toggleHide(e){if(hidden.has(e._id))hidden.delete(e._id);else hidden.add(e._id);renderTree();draw();}
-function selectEnt(e,fromTree){selected=e;renderInspector();updSel();
-  if(!fromTree)syncTreeSelection(); else renderTree(); draw();}
 function syncTreeSelection(){document.querySelectorAll('.row.sel').forEach(r=>r.classList.remove('sel'));
-  if(selected){const r=document.querySelector(`.row[data-id="${selected._id}"]`);if(r){r.classList.add('sel');r.scrollIntoView({block:'nearest'});}else{ // group collapsed → open it
+  selSet.forEach(id=>{const r=document.querySelector(`.row[data-id="${id}"]`);if(r)r.classList.add('sel');});
+  if(selected){const r=document.querySelector(`.row[data-id="${selected._id}"]`);if(r){r.scrollIntoView({block:'nearest'});}else{
     collapsed.delete(groupOf(selected));renderTree();const r2=document.querySelector(`.row[data-id="${selected._id}"]`);if(r2)r2.scrollIntoView({block:'nearest'});}}}
 
 // ── inspector ──────────────────────────────────────────────────────────────────
-function renderInspector(){const ins=$('#insp');if(!selected){ins.innerHTML='<div class="insp-empty">No selection</div>';return;}
+function renderInspector(){const ins=$('#insp');if(!selected){ins.innerHTML=levelPanel();bindLevelPanel();return;}
   const e=selected,P=e.Properties||{};let h='';
-  // Transform
+  if(selSet.size>1)h+=`<div class="f" style="padding:6px 8px"><span class="ro" style="text-align:left">${selSet.size} selected — move / duplicate / copy / delete act on all (with children)</span></div>`;
   const tf=[];
   if(Array.isArray(P.position))tf.push(vecField('position','Position',P.position));
   if('rotation'in P)tf.push(numField('rotation','Rotation','°'));
   if('scale'in P)tf.push(numField('scale','Scale'));
   h+=fold('Transform',tf.join('')||'<div class="f"><label>—</label><span class="ro">no transform</span></div>');
-  // Identity
+  const kids=L.ownedChildren(e).length;
   h+=fold('Identity',`<div class="f"><label>type</label><span class="ctl"><span class="typechip">${e.Type}</span></span></div>`+
-    ('name'in P?txtField('name','name'):'')+`<div class="f"><label>id</label><span class="ro">${e._id}${e.Vertexes?' · '+e.Vertexes.length+' pts'+(P.spline?' (spline)':''):''}</span></div>`);
-  // Appearance (sprites)
+    ('name'in P?txtField('name','name'):'')+`<div class="f"><label>index</label><span class="ro">#${e._id}${e.Vertexes?' · '+e.Vertexes.length+' pts'+(P.spline?' (spline)':''):''}${kids?' · '+kids+' children':''}</span></div>`+
+    (e.Vertexes&&e.Vertexes.length>=3?`<div class="f"><label>winding</label><span class="ctl"><span class="ro">${L.signedArea(e.Vertexes)>0?'CCW':'CW'}</span><button onclick="reverseSel()" title="reverse vertex order">reverse</button></span></div>`:''));
   if('frame'in P){let th='';const fm=FRAMES[P.frame];if(fm)th=`<div class="thumb" style="background-image:url('/api/atlas/${fm.atlas}')" title="${P.frame}"></div>`;
     h+=fold('Appearance',th+selField('frame','frame',Object.keys(FRAMES))+('opacity'in P?rangeField('opacity','opacity',0,1):''));}
-  // Physics
   const phys=['density','friction','restitution'].filter(k=>k in P);
-  if(phys.length)h+=fold('Physics',phys.map(k=>(k==='density'||k==='friction'||k==='restitution')?rangeField(k,k,0,(k==='density'?5:1)):numField(k,k)).join(''));
-  // everything else
+  if(phys.length)h+=fold('Physics',phys.map(k=>rangeField(k,k,0,(k==='density'?5:1))).join(''));
   const shown=new Set(['position','rotation','scale','name','frame','opacity','density','friction','restitution']);
   const rest=Object.keys(P).filter(k=>!shown.has(k)).sort();
   if(rest.length)h+=fold('Type-specific',rest.map(k=>autoField(k,P[k])).join(''));
-  h+=`<div class="delrow"><button onclick="delEntity()">Delete entity</button></div>`;
+  h+=`<div class="delrow"><button onclick="delEntity()">Delete${selSet.size>1?' '+selSet.size+' entities':' entity'} (+ children)</button></div>`;
   ins.innerHTML=h;
   ins.querySelectorAll('.fold>.fhead').forEach(fh=>fh.onclick=()=>{const n=fh.dataset.fold;foldOpen[n]=!foldOpen[n];renderInspector();});
   bindScrub();
 }
+// Level panel (nothing selected): document, target slot, medal times. times = [1★, 2★, 3★], DESCENDING
+// (VERIFIED: 1_25 = [38, 32, 26], 1_1 = [27, 25, 24]; the in-game pause menu lists them in this order).
+function levelPanel(){if(!LEVEL)return '<div class="insp-empty">No level</div>';const t=LEVEL.times||[0,0,0];
+  const counts={};ENTS.forEach(e=>counts[e.Type]=(counts[e.Type]||0)+1);
+  return fold('Level',`<div class="f"><label>document</label><span class="ro">${escapeHtml(DOC)}</span></div>
+    <div class="f"><label title="the game slot this level replaces (mods/<lid>.dat)">target slot (lid)</label><span class="ctl"><input type="text" id="lidIn" value="${escapeHtml(LEVEL.lid||'')}"></span></div>
+    <div class="medals">${['1★ (bronze)','2★ (silver)','3★ (gold)'].map((lb,i)=>`<div class="f"><label>${lb} time</label><span class="ctl"><input type="number" step="0.01" class="medal" data-i="${i}" value="${fmtNum(t[i])}"><span class="axis">s</span></span></div>`).join('')}</div>
+    <div class="f"><label>entities</label><span class="ro">${ENTS.length} · ${Object.entries(counts).sort((a,b)=>b[1]-a[1]).slice(0,4).map(([k,v])=>v+' '+k.replace('Editor','')).join(', ')}</span></div>
+    <div class="delrow"><button style="background:var(--button-bg);border-color:var(--border);color:var(--text)" onclick="saveAsCopy()">Save as copy…</button></div>`);}
+function bindLevelPanel(){const li=$('#lidIn');if(li)li.oninput=()=>{pushUndo('lid');LEVEL.lid=li.value.trim();markDirty();};
+  document.querySelectorAll('input.medal').forEach(inp=>inp.oninput=()=>{const n=parseFloat(inp.value);if(isNaN(n))return;pushUndo('times');LEVEL.times=(LEVEL.times||[0,0,0]).slice();LEVEL.times[+inp.dataset.i]=n;markDirty();});
+  document.querySelectorAll('#insp .fold>.fhead').forEach(fh=>fh.onclick=()=>{const n=fh.dataset.fold;foldOpen[n]=!foldOpen[n];renderInspector();});}
 function fold(name,inner){const open=foldOpen[name]!==false;return `<div class="fold"><div class="fhead" data-fold="${name}"><span class="tri">${open?'▼':'▶'}</span>${name}</div>${open?`<div class="fbody">${inner}</div>`:''}</div>`;}
 function autoField(k,v){if(typeof v==='boolean')return boolField(k,k);if(typeof v==='number')return numField(k,k);if(typeof v==='string')return txtField(k,k);
   if(Array.isArray(v)&&v.every(x=>typeof x==='number'))return arrField(k,k,v);return `<div class="f"><label title="${k}">${k}</label><span class="ro">${escapeHtml(JSON.stringify(v))}</span></div>`;}
@@ -439,61 +575,94 @@ function vecField(k,lbl,arr){return `<div class="f"><label>${lbl}</label><span c
 function arrField(k,lbl,arr){return `<div class="f"><label title="${k}">${lbl}</label><span class="ctl"><input type="text" value="${arr.map(fmtNum).join(', ')}" oninput="setArr('${k}',this.value)"></span></div>`;}
 function selField(k,lbl,opts){const cur=selected.Properties[k];const o=opts.slice(0,400).map(f=>`<option ${f===cur?'selected':''}>${escapeHtml(f)}</option>`).join('');return `<div class="f"><label>${lbl}</label><span class="ctl"><select onchange="setVal('${k}',this.value);renderInspector()">${o}</select></span></div>`;}
 function fmtNum(v){return (Math.round((+v)*1000)/1000);}
-function setVal(k,v){selected.Properties[k]=v;markDirty();draw();}
-function setNum(k,v){const n=parseFloat(v);if(!isNaN(n)){selected.Properties[k]=n;markDirty();draw();}}
-function setVec(k,i,v){const n=parseFloat(v);if(!isNaN(n)){selected.Properties[k][i]=n;markDirty();draw();}}
-function setArr(k,s){const a=s.split(',').map(x=>parseFloat(x.trim())).filter(x=>!isNaN(x));if(a.length){selected.Properties[k]=a;markDirty();draw();}}
-function refreshInspectorVals(){ // light refresh of position/rotation fields during drag
-  const ins=$('#insp');const P=selected.Properties||{};
-  ins.querySelectorAll('.f').forEach(()=>{});renderInspector();}
+function setVal(k,v){pushUndo('f:'+k);selected.Properties[k]=v;markDirty();draw();}
+function setNum(k,v){const n=parseFloat(v);if(!isNaN(n)){pushUndo('f:'+k);selected.Properties[k]=n;markDirty();draw();}}
+function setVec(k,i,v){const n=parseFloat(v);if(!isNaN(n)){pushUndo('f:'+k);if(k==='position'){const P=selected.Properties;const d=n-P.position[i];
+    L.moveSelection(ENTS,[selected._id],i===0?d:0,i===1?d:0);}else selected.Properties[k][i]=n;markDirty();draw();}}
+function setArr(k,s){const a=s.split(',').map(x=>parseFloat(x.trim())).filter(x=>!isNaN(x));if(a.length){pushUndo('f:'+k);selected.Properties[k]=a;markDirty();draw();}}
 let scrubbing=null;
-function bindScrub(){document.querySelectorAll('.f label.scrub').forEach(l=>{l.onmousedown=ev=>{ev.preventDefault();const k=l.dataset.k;const start=+selected.Properties[k]||0;const mag=Math.max(Math.abs(start),1);const step=mag>100?1:mag>10?0.1:0.01;scrubbing={k,start,sx:ev.clientX,step};};});}
+function bindScrub(){document.querySelectorAll('.f label.scrub').forEach(l=>{l.onmousedown=ev=>{ev.preventDefault();const k=l.dataset.k;const start=+selected.Properties[k]||0;const mag=Math.max(Math.abs(start),1);const step=mag>100?1:mag>10?0.1:0.01;pushUndo();scrubbing={k,start,sx:ev.clientX,step};};});}
 window.addEventListener('mousemove',ev=>{if(!scrubbing)return;const dx=ev.clientX-scrubbing.sx;const mult=ev.shiftKey?10:1;selected.Properties[scrubbing.k]=+(scrubbing.start+dx*scrubbing.step*mult).toFixed(4);markDirty();renderInspector();draw();});
 window.addEventListener('mouseup',()=>{scrubbing=null;});
-function delEntity(){const i=ENTS.indexOf(selected);if(i<0)return;hidden.delete(selected._id);ENTS.splice(i,1);selected=null;renderInspector();renderTree();updSel();updCount();markDirty();draw();}
+
+// ── lint ──────────────────────────────────────────────────────────────────────────
+function currentLevel(){return Object.assign({},LEVEL,{Entities:ENTS});}
+function runLint(show){LINT=L.lint(currentLevel(),LEVEL.lid);
+  const fresh=LINT.filter(i=>!BASELINE.has(L.issueKey(currentLevel(),i)));
+  const c=s=>LINT.filter(i=>i.sev===s).length, cf=s=>fresh.filter(i=>i.sev===s).length;
+  $('#lintSum').textContent=`${c('error')} errors · ${c('warn')} warnings (${cf('warn')} new) · ${c('info')} info`;
+  const lv=currentLevel();const order={error:0,warn:1,info:2};
+  $('#lintList').innerHTML=LINT.slice().sort((a,b)=>order[a.sev]-order[b.sev]).map((i,k)=>{const base=BASELINE.has(L.issueKey(lv,i));
+    return `<div class="iss ${i.sev}${base?' base':''}" data-idx="${i.idx===undefined?'':i.idx}"><span class="sv">${i.sev==='error'?'✖':i.sev==='warn'?'▲':'ℹ'}</span><span>${escapeHtml(i.msg)}</span>${base?'<span class="bt">in original</span>':''}</div>`;}).join('')||'<div class="insp-empty">clean</div>';
+  document.querySelectorAll('#lintList .iss').forEach(el=>el.onclick=()=>{const i=el.dataset.idx;if(i!==''){selectEnt(ENTS[+i],false);frameSel();}});
+  return LINT;}
+function lintGate(what){const errs=runLint(true).filter(i=>i.sev==='error');
+  if(errs.length){setStat(`✗ ${errs.length} lint error(s) — fix before ${what}`,'err');return false;}return true;}
 
 // ── status / chrome ──────────────────────────────────────────────────────────
 function updZoom(){$('#sZoom').textContent=Math.round(view.scale*100)+'%';}
 function updCount(){$('#sCount').textContent=ENTS.length+' entities';}
-function updSel(){$('#sSel').textContent=selected?`▸ ${nameOf(selected)} (${selected.Type})`:'—';}
+function updSel(){$('#sSel').textContent=selected?`▸ ${nameOf(selected)} (${selected.Type})${selSet.size>1?' +'+(selSet.size-1):''}`:'—';}
 function setStat(t,c){const s=$('#stat');s.textContent=t;s.className='seg'+(c?' '+c:'');}
 function markDirty(){dirty=true;$('#saveBtn').disabled=false;setStat('● unsaved','dirty');}
-function setTool(t){tool=t;['select','move','rotate','pan'].forEach(x=>$('#t'+x[0].toUpperCase()+x.slice(1)).classList.toggle('on',x===t));draw();}
+function setTool(t){tool=t;if(t!=='draw'){draft=[];draftHover=null;}
+  ['select','move','rotate','pan','draw'].forEach(x=>$('#t'+x[0].toUpperCase()+x.slice(1)).classList.toggle('on',x===t));
+  cv.style.cursor=t==='draw'?'crosshair':'';draw();}
 function toggleGrid(){showGrid=!showGrid;$('#bGrid').classList.toggle('on',showGrid);draw();}
 function toggleSnap(){snap=!snap;$('#bSnap').classList.toggle('on',snap);}
 function toggleArt(){showArt=!showArt;$('#bArt').classList.toggle('on',showArt);draw();}
 function toggleTheme(){const t=document.documentElement.dataset.theme==='unity-dark'?'pro-light':'unity-dark';document.documentElement.dataset.theme=t;localStorage.setItem(LS('theme'),t);draw();}
-
-// medal times live in a small Transform-like editor? keep in toolbar via prompt — simpler: status seg
-// (times are edited via the Level fold below)
+function renderAll(){renderInspector();renderTree();updCount();updSel();runLint();draw();}
 
 // ── atlas loading ──────────────────────────────────────────────────────────────
-async function loadAtlas(lid){FRAMES={};ATLAS={};FILLTEX={};
-  const r=await fetch('/api/atlasmeta/'+encodeURIComponent(lid));const d=await r.json();FRAMES=d.frames||{};
+async function loadAtlas(doc){FRAMES={};ATLAS={};FILLTEX={};
+  const r=await fetch('/api/atlasmeta/'+encodeURIComponent(doc));const d=await r.json();FRAMES=d.frames||{};
   (d.atlases||[]).forEach(name=>{const img=new Image();img.onload=()=>draw();img.src='/api/atlas/'+name;ATLAS[name]=img;});
-  // terrain fill (ground) textures — opaque, tiled into the polygons
   const fills=new Set();ENTS.forEach(e=>{const f=(e.Properties||{}).textureFill;if(f)fills.add(f);});
   fills.forEach(n=>{const img=new Image();img.onload=()=>draw();img.src='/api/fill/'+encodeURIComponent(n);FILLTEX[n]=img;});}
 
-// ── load / save / export ────────────────────────────────────────────────────────
-async function loadLevel(lid){LID=lid;const r=await fetch('/api/level/'+encodeURIComponent(lid));LEVEL=await r.json();
-  ENTS=LEVEL.Entities||[];ENTS.forEach((e,i)=>e._id=i);selected=null;dirty=false;hidden=new Set();hoverVtx=-1;
-  collapsed=new Set(BIG_GROUPS);$('#saveBtn').disabled=true;
-  $('#key').placeholder=KEYS[lid]?'key on file ✓':'level key (hex)';
-  await loadAtlas(lid);
-  renderInspector();renderTree();updCount();updSel();
-  requestAnimationFrame(()=>{resize();frameAll();updZoom();draw();});  // fit once layout settles
-  setStat(KEYS[lid]?'ready · key on file':'ready');}
-async function save(){LEVEL.Entities=ENTS.map(({_id,...e})=>e);setStat('saving…','busy');
-  const r=await fetch('/api/level/'+encodeURIComponent(LID),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(LEVEL)});
-  const d=await r.json();ENTS.forEach((e,i)=>e._id=i);
-  if(d.ok){dirty=false;$('#saveBtn').disabled=true;setStat('✓ saved ('+d.entities+')','ok');}else setStat('✗ '+d.error,'err');return d.ok;}
-async function exportDat(){if(dirty){if(!await save())return;}const key=$('#key').value.trim();
-  if(!key&&!KEYS[LID]){setStat('✗ enter the level key','err');$('#key').focus();return;}
+// ── load / save / export / push ───────────────────────────────────────────────────
+async function loadLevel(doc){DOC=doc;const r=await fetch('/api/level/'+encodeURIComponent(doc));LEVEL=await r.json();
+  ENTS=LEVEL.Entities||[];ENTS.forEach((e,i)=>{e._id=i;e.__src=i;});selected=null;selSet=new Set();dirty=false;hidden=new Set();hoverVtx=-1;
+  UNDO=[];REDO=[];updUndo();collapsed=new Set(BIG_GROUPS);$('#saveBtn').disabled=true;
+  $('#key').placeholder=HAVEKEY?'key on file ✓':'level key (hex)';
+  BASELINE=new Set(L.lint(currentLevel(),LEVEL.lid).map(i=>L.issueKey(currentLevel(),i)));
+  await loadAtlas(doc);
+  renderAll();
+  requestAnimationFrame(()=>{resize();frameAll();updZoom();draw();});
+  setStat(HAVEKEY?'ready · key on file':'ready');}
+async function save(){const body=Object.assign({},LEVEL,{Entities:ENTS.map(({_id,...e})=>e)});setStat('saving…','busy');
+  const r=await fetch('/api/level/'+encodeURIComponent(DOC),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const d=await r.json();
+  if(d.ok){ENTS.forEach((e,i)=>{e._id=i;e.__src=i;});dirty=false;$('#saveBtn').disabled=true;setStat('✓ saved, types preserved ('+d.entities+')','ok');}else setStat('✗ '+d.error,'err');return d.ok;}
+async function saveAsCopy(){const name=prompt('Save a copy as (document name, e.g. 1_25-copy):',DOC+'-copy');if(!name)return;
+  if(dirty&&!await save())return;
+  const r=await fetch('/api/copy/'+encodeURIComponent(DOC),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
+  const d=await r.json();if(!d.ok){setStat('✗ '+d.error,'err');return;}
+  await refreshDocs(d.doc);await loadLevel(d.doc);setStat('✓ now editing copy '+d.doc,'ok');}
+async function exportDat(){if(dirty){if(!await save())return;}if(!lintGate('export'))return;const key=$('#key').value.trim();
+  if(!key&&!HAVEKEY){setStat('✗ enter the level key','err');$('#key').focus();return;}
   setStat('encrypting… (~1 min)','busy');$('#exportBtn').disabled=true;
-  try{const r=await fetch('/api/export/'+encodeURIComponent(LID),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key,remember:true})});
-    const d=await r.json();if(d.ok){setStat('✓ wrote '+d.path.split('/').pop()+' ('+d.bytes+' B)','ok');KEYS[LID]=true;}else setStat('✗ '+d.error,'err');}
+  try{const r=await fetch('/api/export/'+encodeURIComponent(DOC),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key,remember:true})});
+    const d=await r.json();if(d.ok){setStat('✓ wrote '+d.path.split('/').pop()+' ('+d.bytes+' B)','ok');HAVEKEY=true;}else setStat('✗ '+d.error,'err');}
   catch(e){setStat('✗ '+e,'err');}$('#exportBtn').disabled=false;}
+async function pushToGame(){if(dirty){if(!await save())return;}if(!lintGate('pushing'))return;
+  const key=$('#key').value.trim();if(!key&&!HAVEKEY){setStat('✗ enter the level key','err');$('#key').focus();return;}
+  setStat(`pushing ${LEVEL.lid}… (export ~1 min, then load in game)`,'busy');$('#pushBtn').disabled=true;
+  try{const r=await fetch('/api/push/'+encodeURIComponent(DOC),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key,play:$('#pushPlay').checked})});
+    const d=await r.json();showPush(d);setStat(d.ok?`✓ ${LEVEL.lid} loaded in game`:'✗ push failed: '+(d.error||'see report'),d.ok?'ok':'err');}
+  catch(e){setStat('✗ '+e,'err');}$('#pushBtn').disabled=false;}
+function showPush(d){const steps=(d.steps||[]).map(s=>`<span class="${s.ok?'ok':'bad'}">${s.ok?'✓':'✗'} ${s.step} <span style="color:var(--text-faint)">${s.t}s</span></span>`).join('');
+  const ev=(d.events||[]).map(e=>JSON.stringify(e)).join('\n');
+  $('#mbox').innerHTML=`<h3>${d.ok?'✓':'✗'} Push ${escapeHtml(d.lid||LEVEL.lid)} → game</h3><div class="steps">${steps}</div>
+    ${d.error?`<pre class="bad">${escapeHtml(d.error)}</pre>`:''}
+    ${d.shot_data?`<img src="${d.shot_data}" alt="in-game screenshot">`:''}
+    ${d.mod_line?`<pre>${escapeHtml(d.mod_line)}</pre>`:''}
+    ${d.play?`<pre>ride: race_start=${d.play.race_start} death=${d.play.death} run_time ${JSON.stringify(d.play.run_time)} ratio ${d.play.ratio}</pre>`:''}
+    <pre>${escapeHtml(ev)}</pre>${(d.crashes||[]).length?`<pre class="bad">${escapeHtml(d.crashes.join('\n'))}</pre>`:''}
+    <div style="text-align:right"><button onclick="closeModal()">Close</button></div>`;
+  $('#modal').classList.add('on');}
+function closeModal(){$('#modal').classList.remove('on');}
 
 // ── splitters ────────────────────────────────────────────────────────────────
 function initSplitter(el,varName,fromLeft){let on=false;el.addEventListener('mousedown',e=>{on=true;e.preventDefault();});
@@ -505,16 +674,19 @@ function resize(){const v=document.querySelector('.viewport').getBoundingClientR
 window.addEventListener('resize',()=>{resize();draw();});
 window.addEventListener('beforeunload',e=>{if(dirty){e.preventDefault();e.returnValue='';}});
 
+async function refreshDocs(cur){const d=await (await fetch('/api/levels')).json();const sel=$('#lvlSel');sel.innerHTML='';
+  (d.levels||[]).forEach(l=>{const o=document.createElement('option');o.value=o.textContent=l;sel.appendChild(o);});
+  if(cur)sel.value=cur;return d.levels||[];}
 async function init(){
   const th=localStorage.getItem(LS('theme'));if(th)document.documentElement.dataset.theme=th;
   ['--left-w','--right-w'].forEach(v=>{const s=localStorage.getItem(LS(v));if(s)document.documentElement.style.setProperty(v,s+'px');});
-  setTool('select');$('#bGrid').classList.add('on');$('#bArt').classList.add('on');
+  setTool('select');$('#bGrid').classList.add('on');$('#bArt').classList.add('on');updUndo();
   initSplitter($('#lsplit'),'--left-w',true);initSplitter($('#rsplit'),'--right-w',false);
-  KEYS=((await (await fetch('/api/keys')).json()).have)||{};
-  const d=await (await fetch('/api/levels')).json();const sel=$('#lvlSel');sel.innerHTML='';
-  (d.levels||[]).forEach(l=>{const o=document.createElement('option');o.value=o.textContent=l;sel.appendChild(o);});
-  sel.onchange=()=>{if(dirty&&!confirm('Discard unsaved changes?')){sel.value=LID;return;}loadLevel(sel.value);};
-  if(d.levels&&d.levels.length)loadLevel(d.levels[0]);else{$('#tree').innerHTML='<div class="insp-empty">No cached levels.</div>';}
+  HAVEKEY=!!((await (await fetch('/api/keys')).json()).have);
+  const levels=await refreshDocs();const sel=$('#lvlSel');
+  sel.onchange=()=>{if(dirty&&!confirm('Discard unsaved changes?')){sel.value=DOC;return;}loadLevel(sel.value);};
+  const want=new URLSearchParams(location.search).get('doc');
+  if(levels.length)loadLevel(want&&levels.includes(want)?want:levels[0]);else{$('#tree').innerHTML='<div class="insp-empty">No cached levels.</div>';}
 }
 init();
 </script>

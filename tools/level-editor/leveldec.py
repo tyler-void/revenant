@@ -188,6 +188,122 @@ def _from_jsonable(o):
     return o
 
 
+# ── type fidelity: int vs real survives the browser ─────────────────────────────
+# The browser's JSON turns 27.0 into 27, and plistlib would then write an <integer>. The game reads
+# NSNumber so it often copes — but we want byte-faithful levels. Every entity the editor sends carries
+# `__src` = its row in the LAST TYPED save of this document; numbers are restored to that row's types,
+# falling back to a (Type, path) schema learned from all cached levels (pasted/duplicated entities).
+# Only ONE numeric path in the corpus mixes int and real (EditorPhysicsObject Vertexes[].segments), so
+# the schema covers everything else unambiguously; for mixed paths the source row decides.
+SRC_KEY = "__src"
+
+
+def _schema_walk(o, path, out):
+    if isinstance(o, bool):
+        return
+    if isinstance(o, (int, float)):
+        out.setdefault(path, set()).add(float if isinstance(o, float) else int)
+    elif isinstance(o, dict):
+        for k, v in o.items():
+            _schema_walk(v, path + "." + k, out)
+    elif isinstance(o, list):
+        for v in o:
+            _schema_walk(v, path + "[]", out)
+
+
+def type_schema(levels):
+    """{path: int|float} for every numeric path that is unambiguous across `levels` (decoded dicts)."""
+    seen = {}
+    for lv in levels:
+        for k, v in lv.items():
+            if k != "Entities":
+                _schema_walk(v, "$" + k, seen)
+        for e in lv.get("Entities", []):
+            _schema_walk(e, e.get("Type", "?"), seen)
+    return {p: next(iter(t)) for p, t in seen.items() if len(t) == 1}
+
+
+def _retype(val, tmpl, path, schema):
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, int):
+        want = (float if isinstance(tmpl, float) else int) if isinstance(tmpl, (int, float)) and not isinstance(tmpl, bool) \
+            else schema.get(path)
+        return float(val) if want is float else val
+    if isinstance(val, dict):
+        t = tmpl if isinstance(tmpl, dict) else {}
+        return {k: _retype(v, t.get(k), path + "." + k, schema) for k, v in val.items()}
+    if isinstance(val, list):
+        t = tmpl if isinstance(tmpl, list) else []
+        # same position if it exists, else the first element (e.g. a newly inserted vertex)
+        return [_retype(v, t[i] if i < len(t) else (t[0] if t else None), path + "[]", schema) for i, v in enumerate(val)]
+    return val
+
+
+def retype_level(new, old, schema):
+    """Restore int/real types of `new` (browser JSON) from `old` (last typed save) + `schema`.
+    Strips the editor's __src markers."""
+    old_ents = old.get("Entities", []) if old else []
+    out = {}
+    for k, v in new.items():
+        if k == "Entities":
+            continue
+        out[k] = _retype(v, (old or {}).get(k), "$" + k, schema)
+    ents = []
+    for e in new.get("Entities", []):
+        e = dict(e)
+        src = e.pop(SRC_KEY, None)
+        e.pop("_id", None)
+        tmpl = old_ents[src] if isinstance(src, int) and 0 <= src < len(old_ents) \
+            and old_ents[src].get("Type") == e.get("Type") else None
+        ents.append(_retype(e, tmpl, e.get("Type", "?"), schema))
+    out["Entities"] = ents
+    return out
+
+
+# Real levels contain non-finite reals (e.g. 1_25 radius = NaN). Python's json writes a bare NaN token,
+# which browser JSON.parse rejects — so the wire format tags them: {"__float__": "nan"|"inf"|"-inf"}.
+def to_wire(o):
+    if isinstance(o, float) and o != o:
+        return {"__float__": "nan"}
+    if isinstance(o, float) and o in (float("inf"), float("-inf")):
+        return {"__float__": "inf" if o > 0 else "-inf"}
+    if isinstance(o, dict):
+        return {k: to_wire(v) for k, v in o.items()}
+    if isinstance(o, list):
+        return [to_wire(v) for v in o]
+    return o
+
+
+def from_wire(o):
+    if isinstance(o, dict):
+        if set(o) == {"__float__"}:
+            return float(o["__float__"])
+        return {k: from_wire(v) for k, v in o.items()}
+    if isinstance(o, list):
+        return [from_wire(v) for v in o]
+    return o
+
+
+def cached_levels():
+    out = []
+    for p in sorted(glob.glob(os.path.join(CACHE, "*.level.json"))):
+        try:
+            with open(p) as f:
+                out.append(json.load(f))
+        except Exception:
+            pass
+    return out
+
+
+def level_key(lid=None):
+    """The level key: per-lid entry if present, else ANY stored key (all levels share one key)."""
+    keys = load_keys()
+    if lid and keys.get(lid):
+        return keys[lid]
+    return next((k for k in keys.values() if k), None)
+
+
 def raw_to_level(raw):
     """Decrypted bytes (gzip stream or bare bplist) → plist dict (native types)."""
     if raw[:3] == GZIP_MAGIC:

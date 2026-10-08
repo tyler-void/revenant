@@ -5,10 +5,11 @@
 
 ## Level data / physics
 
-- **Box2D ground must be wound COUNTER-CLOCKWISE.** A clockwise terrain polygon
-  builds collision solid-side-DOWN → the bike falls straight through → the race
-  never starts. (1_1's rideable terrain is 97/104 CCW.) *Fix:* reverse the vertex
-  list so signed area > 0 (Y-up).
+- ~~Box2D ground must be wound COUNTER-CLOCKWISE.~~ **Corrected 2026-10-08:** real levels
+  ship clockwise physics polygons and play (1_25: 53 CW, 41 of them dynamic). The generator's
+  fall-through came from one giant concave polygon, not from its winding. CCW is still the
+  safe choice for NEW terrain (the editor's draw tool winds CCW), but it is not a rule —
+  measure the corpus before turning a hypothesis into a lint error.
 - **A level's `lid` must match the slot it's placed in.** A `.dat` swapped into
   `1/1_4.dat` must have `lid:"1_4"`; the game keys off it and rejects a mismatched
   level (decrypt succeeds — confirmed via the RVLEN keylog — but the scene never
@@ -233,3 +234,23 @@
   methods must check `SO_PEERCRED` (accept uid 0/2000 only) and stay off by default.
 - **Fast native loop = swap one file inside the APK.** `zip` the new `libmod.so` over the old entry, re-sign
   with the same key, `install -r`: 3–8 s per iteration instead of an apktool rebuild.
+
+## Level editor MVP (Phase 4, 2026-10-08)
+
+- **Check a rule against shipped levels before linting for it.** "Terrain must be CCW" would have
+  flagged 58 of 1_25's 76 polygons in a level that plays; it is `info`, not an error. Likewise the
+  ">8 vertices / concave" warnings: tag issues already present in the shipped level ("in original")
+  so authors only see what THEY introduced.
+- **JSON round trips lose int vs real.** A browser save turned 3 087 reals of 1_25 into ints. Fix:
+  every entity carries `__src` (its row in the last typed save) and the server restores types from it,
+  with a (Type, path) schema from all cached levels as the fallback — only ONE numeric path in the
+  corpus mixes int/real (`Vertexes[].segments`). Proven by decode → save → export → decode.
+- **Python's json writes bare `NaN`; browsers reject it.** Real levels contain NaN, so the editor
+  couldn't even load 1_25 before the wire format tagged non-finite reals.
+- **Handles overlap on real data.** A terrain vertex sat exactly on the entity's `position`, so a
+  "move" drag on the gizmo centre dragged the vertex instead. With the Move tool the gizmo wins.
+- **Group entities have no position** (barrels, finish, prefab groups) — anything that needs a point
+  must fall back to the children.
+- **Prove "loaded" by the postcondition, not the request:** the push helper waits for the game to log
+  `[MOD] <lid>.dat` (it read OUR file) and `goto_done` with the right lid + bodies + bike, after a
+  unique `RVMARK` proves the log ring has caught up (the ring replays old logcat history first).

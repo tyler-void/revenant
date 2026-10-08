@@ -147,9 +147,20 @@ Run: `python3 tools/level-editor/server.py`. Restart it by killing the `:8778` l
 - `export <lid>.level.json <out.dat> <KEYHEX>` → device-loadable .dat (JSON→bplist→gzip→encrypt).
 - UI: grouped/searchable hierarchy, foldout inspector (Transform/Identity/Physics/...),
   move/rotate gizmos, terrain control-point drag, Save (→cache) + Export (→.dat).
+- Phase-4 MVP (2026-10-08, UI-acceptance-tested with Playwright + device): ref-safe delete/move/duplicate/
+  cross-level copy-paste (`levelops.js`, Node tests: `node --test tools/level-editor/tests/`), undo/redo,
+  lint panel (errors gate Export/Push; issues already in the shipped level are tagged), vertex insert
+  (click an edge) / delete (Alt-click), draw-terrain tool (T), Level panel (target slot + medal times),
+  save-as-copy, TYPED saves (`leveldec.retype_level`; levels contain NaN → wire tags `{"__float__":"nan"}`;
+  proof: `tests/roundtrip_types.py`), and **▶ Push to game** (`push_to_game.py`: export → mods/<lid>.dat →
+  bridge goto_level → `[MOD]` + level_loaded → ride → screenshot shown in the editor). Node lives at
+  `~/.nvm/versions/node/*/bin/node` (the nvm lazy-loader breaks non-interactive shells).
 
 ### Level data schema (decoded bplist)
-`{ lid, type, times:[gold,silver,bronze], Entities:[…] }`. Entity = `{Type, Properties, Vertexes?, Anchors?}`.
+`{ lid, type, times:[1★,2★,3★] (DESCENDING, e.g. [38.0,32.0,26.0] — VERIFIED), Entities:[…] }`. Entity = `{Type, Properties, Vertexes?, Anchors?}`.
+Index refs (VERIFIED, -1 = none): lists `refobjectList`/`mountedSprites` (owned children) + `objects` (trigger links);
+singles `refentity`/`reffollowEntity`/`refsprite1`; joints `Anchors[].object_id/object2_id` (two body slots;
+a missing/-1 slot = the world). All handled by `tools/level-editor/levelops.js`.
 Types: `EditorPhysicsObject` (terrain — `Vertexes:[{x,y,segments}]` in WORLD coords,
 `spline:True`→Catmull-Rom else polygon; `textureFill`/`textureEdge`/`fillTile`/`textureRot`),
 `EditorSprite` (decoration — `position[x,y]`, `frame`, `scale`, `rotation`, `anchorX/Y=0.5`, `z`),

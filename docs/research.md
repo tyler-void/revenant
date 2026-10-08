@@ -45,7 +45,8 @@ Implications:
 
 ## The level format (decoded bplist)
 
-`{ lid, type, times:[t0,t1,t2] (medal times), Entities:[…] }`. Each entity:
+`{ lid, type, times:[1★,2★,3★] (medal times, DESCENDING — VERIFIED: 1_25 = [38.0, 32.0, 26.0],
+1_1 = [27.0, 25.0, 24.0], and the pause menu lists them in that order), Entities:[…] }`. Each entity:
 `{ Type, Properties{…}, Vertexes?[{x,y,segments}], Anchors?[…] }`.
 
 Entity types and how they render/behave:
@@ -70,8 +71,26 @@ Entity types and how they render/behave:
   `refobjectList` / `prefabName`.
 - **EditorCamera** — follows `objectName:"heroTorso"` (the bike).
 
-⚠ **Index-based references** (`refobjectList`, `mountedSprites`) point to entity
-ARRAY INDICES. If you rebuild/reorder the entity list you MUST remap them.
+⚠ **Index-based references** point to entity ARRAY INDICES. If you rebuild/reorder the
+entity list you MUST remap them. Full model (VERIFIED 2026-10-08 on 1_1 / 1_25 / 5_1 by
+checking every target's type; -1 = none):
+- lists: `refobjectList` (group → children: sprites/bodies/triggers), `mountedSprites`
+  (body → EditorSprites drawn on it), `objects` (EditorTrigger/WaterTrigger → the joints,
+  bodies, barrels they act on);
+- singles: `refentity` (trigger → joint/body), `reffollowEntity` (camera), `refsprite1`
+  (always -1 so far); `groupIndex` is a float Box2D filter, NOT a ref;
+- joints: two body slots. Revolute/Weld = ONE anchor with `object_id` + `object2_id`
+  (`object2_id` absent in 4 cases = the world); Distance = TWO anchors with one `object_id`
+  each; -1 = the world.
+- Group entities (ExplosiveBarrel/TriggerWin/EditorPhysicsEntity) carry NO position of their
+  own — their children hold the geometry.
+- **Clockwise polygons are legal.** 1_25 ships 53 CW *physics* polygons (41 dynamic, 12 static)
+  and plays; 1_1 is mostly CCW. The old "ground must be CCW" rule came from one giant
+  generated polygon that was also concave/oversized.
+- **Levels contain non-finite reals** (1_25: a WaterTrigger `radius` = NaN) — strict JSON
+  can't carry them; the editor's wire format tags them.
+- 7/93 (1_1) and 7/76 (1_25) non-spline physics polygons are concave or have > 8 vertices,
+  yet load — so the game's Box2D mapping isn't plain `b2PolygonShape` (open: Phase-3 RE).
 
 ## Level corpus analysis (all 130 decoded levels)
 
