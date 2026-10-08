@@ -88,6 +88,8 @@ arrives before your wait starts. `regex` matches `"L TAG: message"`.
 | `bike` | | chassis + wheels: `pos`, `center`, `angle` (rad, + = CCW / nose up), `vel`, `speed`, `ang_vel` (Box2D world units), `dead`, current input, `run_time`, `mono` |
 | `scene_dump` | `depth, limit, class (prefix), visible_only, ptr` | CCNode tree with `z`, `tag`, `visible`, `pos`, `size` and `world_bbox` in cocos points (design resolution 550×320) |
 | `trace_start` | `fields[], every_n, max, while_running` | records per-frame bike samples IN-GAME on the GL thread (swap hook, read-only — timer-safe). Fields: `frame t x y vx vy a w bx by fx fy c air gt ct dead thr brk lean` (default `t x y vx vy a w c`). `c` = the game's ground flags (1 back wheel, 2 front, 4/8 precise, 16 head hit); `gt` = ground tangent angle; `air` = airTime_. `while_running` (default true) keeps only frames where run_time advanced → exactly one sample per physics step. Stops itself on a new bike (`stopped: bike_changed`) or at `max` |
+| `bot_start` | `params{kp,kd,air_kp,air_kd,takeoff_lean,takeoff_s,flip_cut,stuck_s,max_s,gravity,ride_h,throttle,head,ceil_s,ceil_brake}, px[], py[], slices{x0,dx,iv}, plan[[x0,x1,thr,brk,lean]]` | in-game bot (GL thread, same input path); ends with event `bot_result{result,run_time,x,progress,…}`. Host: `tools/levelgen/bot_eval.py` |
+| `bot_stop` | | stops the bot (`bot_result` stopped) |
 | `trace_stop` | `keep, stride` | returns `{n, fields, data:{field:[…]}}` (columnar, `%.6g`); `keep:true` = peek without stopping. Large: drive it from a script, not interactively |
 
 Events (ring of 512 + logcat line `RVEVT {"seq":N,"type":"…","mono":T,…}` under tag `RVMOD`):

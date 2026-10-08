@@ -306,8 +306,10 @@ void rv_on_menu_ready(id menu){
     rv_event("menu_did_finish_loading", ("\"menu\":" + js(cname(menu)) + ",\"ptr\":" + jp(menu)).c_str());
 }
 static bool run_time(float* out);   // Manager.time_ (defined with the Box2D helpers below)
+static void bot_on_finish(float rt);
 void rv_on_level_finished(id arg){
     float rt = -1.0f; run_time(&rt);
+    bot_on_finish(rt);
     std::string f = "\"lid\":" + js(cur_lid().c_str()) + ",\"run_time\":" + jf(rt) +
                     ",\"arg_class\":" + js(cname(arg));
     rv_event("finish", f.c_str());
@@ -745,7 +747,7 @@ static std::string cmd_bike(){
     if(!bike) return "{\"bike\":null,\"why\":\"no level loaded (or the bike was not captured)\"}";
     id torso = responds(bike, "heroTorso") ? m0(bike, "heroTorso") : 0;
     std::string r = "{\"bike\":" + jp(bike) + ",\"class\":" + js(cname(bike)) + ",\"torso\":" + body_json(phys_body(torso));
-    const char* wheels[] = {"backWheel_", "frontWheel_"};
+    const char* wheels[] = {"backWheel_", "frontWheel_", "motoCenter_"};
     for(const char* wn : wheels){
         char* w; const char* t;
         if(ivar_loc(bike, wn, &w, &t)) r += ",\"" + std::string(wn, strlen(wn) - 1) + "\":" + body_json(phys_body(*(id*)w));
@@ -802,6 +804,29 @@ static std::string cmd_scene_dump(const JV& a){
     return r + "],\"scanned\":" + ji((long long)all.size()) + "}";
 }
 
+// Bot state (the bot itself is below; the trace reads its debug fields).
+struct BotParams {
+    float kp = 2.0f, kd = 0.3f, air_kp = 1.5f, air_kd = 0.4f;
+    float takeoff_lean = 0.4f, takeoff_s = 0.12f, flip_cut = 0.9f;
+    float stuck_s = 6.0f, max_s = 150.0f, gravity = 68.0f, ride_h = 4.0f, throttle = 1.0f;
+    float head = 12.0f, ceil_s = 2.0f, ceil_brake = 1.0f;     // ceiling look-ahead (rider head above wheel mid)
+};
+struct BotSeg { float x0, x1, thr, brk, lean; };               // plan override: thr/brk < 0 = keep the policy's
+struct BotState {
+    bool active = false, started = false, was_ground = true;
+    BotParams p;
+    std::vector<float> px, py;
+    float takeoff_until = -1, tgt_last = 0, best_x = -1e30f, best_t = 0, start_x = 0, max_air = 0, air_t0 = 0;
+    float prev_pitch = NAN, prev_rt = -1, rate_f = 0;
+    float dbg_target = NAN, dbg_pitch = NAN, dbg_land_x = NAN;            // exposed as trace fields bt bp bl
+    float sl_x0 = 0, sl_dx = 0;                                           // static solid occupancy (host slices):
+    std::vector<std::vector<float>> slices;                               // per x: [bottom, top, bottom, top, …]
+    std::vector<BotSeg> plan;
+    int ceil_frames = 0; bool dbg_ceil = false;
+    int bike_gen = -1, frames = 0;
+};
+static BotState g_bot;
+
 // ── trace: per-frame bike samples recorded IN-GAME on the GL thread ──────────────────────────
 // trace_start{fields, every_n, max, while_running} / trace_stop{keep, stride}. Samples are taken in
 // rv_bridge_frame (the swap hook — reads only, so the run timer stays correct) and returned as
@@ -810,10 +835,13 @@ static std::string cmd_scene_dump(const JV& a){
 // bx by fx fy (back/front wheel pos), c (the GAME's ground flags: 1 Bike.backGround_, 2 frontGround_,
 // 4 BikeCommon1.backGroundPrecise_, 8 frontGroundPrecise_, 16 Bike.headHit_), air (BikeCommon1.airTime_),
 // gt (angle of BikeCommon1.groundTangent_, radians), ct (raw Box2D touching bits — 1 back wheel, 2 front,
-// 4 chassis — DIAGNOSTIC: sensor/trigger contacts also count), dead, thr brk lean (bridge input). while_running (default true) samples only frames where run_time
+// 4 chassis — DIAGNOSTIC: sensor/trigger contacts also count), dead, thr brk lean (bridge input),
+// ma mw (BikeCommon1.motoCenter_ angle / angular velocity — NOT consistent with each other, the game
+// likely sets that body's transform; x/y/a/w are the rider's torso), bt bp bl (bot: target angle, frame
+// pitch = wheel-axis angle, predicted landing x). while_running (default true) samples only frames where run_time
 // advanced (= physics stepped and the race clock runs), so pre-start / paused frames are skipped.
 static const char* TRACE_FIELDS[] = {"frame", "t", "x", "y", "vx", "vy", "a", "w", "bx", "by", "fx", "fy",
-                                     "c", "dead", "thr", "brk", "lean", "air", "gt", "ct"};
+                                     "c", "dead", "thr", "brk", "lean", "air", "gt", "ct", "ma", "mw", "bt", "bp", "bl", "ceil"};
 static const int N_TRACE_FIELDS = sizeof TRACE_FIELDS / sizeof *TRACE_FIELDS;
 struct TraceState {
     bool active = false, while_running = true;
@@ -846,9 +874,10 @@ static void trace_tick(){
     char* torso = phys_body(responds(bike, "heroTorso") ? m0(bike, "heroTorso") : 0);
     char* bw = 0; char* fw = 0;
     bool need_wheels = false;
-    for(int f : T.fields) if((f >= 8 && f <= 11) || f == 19) need_wheels = true;
+    for(int f : T.fields) if((f >= 8 && f <= 11) || f >= 19) need_wheels = true;
     const BikeIvars& bv = bike_ivars(bike);
-    if(need_wheels){ bw = wheel_body(bike, "backWheel_"); fw = wheel_body(bike, "frontWheel_"); }
+    char* mc = 0;
+    if(need_wheels){ bw = wheel_body(bike, "backWheel_"); fw = wheel_body(bike, "frontWheel_"); mc = wheel_body(bike, "motoCenter_"); }
     float* tf = (float*)torso;
     for(size_t k = 0; k < T.fields.size(); k++){
         float v = NAN;
@@ -873,6 +902,12 @@ static void trace_tick(){
             case 17: if(bv.air) v = *(float*)bv.air; break;
             case 18: if(bv.gt) v = atan2f(((float*)bv.gt)[1], ((float*)bv.gt)[0]); break;
             case 19: v = (float)((touching(bw) ? 1 : 0) | (touching(fw) ? 2 : 0) | (touching(torso) ? 4 : 0)); break;
+            case 20: if(mc) v = ((float*)mc)[16]; break;
+            case 21: if(mc) v = ((float*)mc)[19]; break;
+            case 22: v = g_bot.dbg_target; break;
+            case 23: v = g_bot.dbg_pitch; break;
+            case 24: v = g_bot.dbg_land_x; break;
+            case 25: v = g_bot.dbg_ceil ? 1.0f : 0.0f; break;
         }
         T.cols[k].push_back(v);
     }
@@ -928,6 +963,225 @@ static std::string cmd_trace_stop(const JV& a){
     return r;
 }
 
+// ── in-game bot (G3): bot_start{params, px, py} / bot_stop ─────────────────────────────────────
+// Runs once per frame on the GL thread (rv_bridge_frame, before input_tick) and drives the bike through
+// the same input path as `input`. Policy v0:
+//   throttle = 1 (cut to 0 while grounded with the nose more than flip_cut rad above the slope);
+//   grounded: PD on the bike FRAME pitch = the wheel-axis angle atan2(front - back) toward the game's ground
+//             tangent (motoCenter_'s angle/angVel disagree — d(angle)/dt vs angVel cosine 0.04 — so the game
+//             likely sets that body's transform itself; the wheel axis is pure geometry), rate = filtered
+//             finite difference per physics step:
+//             lean = kp*(pitch - slope) + kd*pitch_rate   (lean +1 = forward / clockwise);
+//   takeoff:  lean back (-takeoff_lean) for takeoff_s after the wheels leave the ground;
+//   airborne: PD toward the slope at the predicted landing point (ballistic, `gravity`, over the optional
+//             host profile px/py), else toward the last ground slope.
+//   ceiling:  with host `slices` (static solid occupancy), while grounded predict the launch parabola from
+//             the current velocity; if the rider's head would enter solid from BELOW while rising -> brake;
+//   plan:     host overrides by torso x [[x0, x1, thr, brk, lean_bias], …] (thr/brk < 0 = keep) — for search.
+// Ends with event bot_result{result: finish|death|stuck|timeout|no_start|aborted|stopped, run_time, x, ...}.
+
+static float wrap_pi(float a){ while(a > 3.14159265f) a -= 6.2831853f; while(a < -3.14159265f) a += 6.2831853f; return a; }
+static float clampf(float v, float lo, float hi){ return v < lo ? lo : v > hi ? hi : v; }
+static bool profile_y(float x, float* y){
+    const std::vector<float>& X = g_bot.px;
+    if(X.size() < 2 || x < X.front() || x > X.back()) return false;
+    size_t i = std::upper_bound(X.begin(), X.end(), x) - X.begin();
+    if(i == 0) i = 1; if(i >= X.size()) i = X.size() - 1;
+    float t = (x - X[i - 1]) / std::max(1e-6f, X[i] - X[i - 1]);
+    *y = g_bot.py[i - 1] + t * (g_bot.py[i] - g_bot.py[i - 1]);
+    return true;
+}
+// Static solid occupancy from the host (vertical slices of the level's static colliding geometry).
+static const std::vector<float>* slice_at(float x){
+    const BotState& B = g_bot;
+    if(B.slices.empty() || B.sl_dx <= 0) return nullptr;
+    long i = lroundf((x - B.sl_x0) / B.sl_dx);
+    return (i < 0 || i >= (long)B.slices.size()) ? nullptr : &B.slices[i];
+}
+// 1 = inside solid entered from below (ceiling), 2 = inside solid from above (ground; *top = its surface)
+static int solid_kind(float x, float y, float* top){
+    const std::vector<float>* v = slice_at(x);
+    if(!v) return 0;
+    for(size_t k = 0; k + 1 < v->size(); k += 2){
+        float b = (*v)[k], t = (*v)[k + 1];
+        if(y >= b && y <= t){ if(top) *top = t; return (y - b) < (t - y) ? 1 : 2; }
+    }
+    return 0;
+}
+static bool surface_near(float x, float y, float* top){       // the solid top closest to y at x
+    const std::vector<float>* v = slice_at(x);
+    if(!v || v->empty()) return false;
+    float best = 1e30f;
+    for(size_t k = 1; k < v->size(); k += 2) if(fabsf((*v)[k] - y) < fabsf(best - y)) best = (*v)[k];
+    *top = best;
+    return best < 1e29f;
+}
+static bool bike_dead(id bike){
+    const char* sels[] = {"kill", "dead", "exploded"};
+    for(const char* s : sels) if(responds(bike, s) && (((int(*)(id,SEL))R.msgSend)(bike, sel(s)) & 0xff)) return true;
+    return false;
+}
+static void bot_end(const char* result, float rt, float x){
+    if(!g_bot.active) return;
+    g_bot.active = false;
+    g_input.thr = g_input.brk = g_input.lean = 0; g_input.release_at = 0; g_input.dirty = true;
+    char f[320];
+    snprintf(f, sizeof f, "\"result\":\"%s\",\"lid\":%s,\"run_time\":%s,\"x\":%s,\"start_x\":%s,\"progress\":%s,\"frames\":%d,\"ceil_frames\":%d,\"max_air_s\":%s",
+             result, js(cur_lid().c_str()).c_str(), jf(rt).c_str(), jf(x).c_str(), jf(g_bot.start_x).c_str(),
+             jf(x - g_bot.start_x).c_str(), g_bot.frames, g_bot.ceil_frames, jf(g_bot.max_air).c_str());
+    rv_event("bot_result", f);
+}
+static void bot_on_finish(float rt){
+    if(!g_bot.active) return;
+    id bike = cur_bike();
+    char* t = bike ? phys_body(responds(bike, "heroTorso") ? m0(bike, "heroTorso") : 0) : 0;
+    bot_end("finish", rt, t ? ((float*)t)[3] : NAN);
+}
+static void bot_tick(){
+    BotState& B = g_bot;
+    if(!B.active) return;
+    if(!g_level_active){ bot_end("aborted", -1, NAN); return; }
+    id bike = cur_bike();
+    if(!bike) return;
+    int gen = R.bike_gen ? *R.bike_gen : 0;
+    float rt = -1; run_time(&rt);
+    char* torso = phys_body(responds(bike, "heroTorso") ? m0(bike, "heroTorso") : 0);
+    char* mc = wheel_body(bike, "motoCenter_");
+    char* bw = wheel_body(bike, "backWheel_");
+    char* fw = wheel_body(bike, "frontWheel_");
+    if(!torso || !mc || !bw || !fw) return;
+    float* T = (float*)torso; float* M = (float*)mc; float* BW = (float*)bw; float* FW = (float*)fw;
+    float x = T[3];
+    if(B.bike_gen < 0){ B.bike_gen = gen; B.start_x = x; }
+    else if(gen != B.bike_gen){ bot_end("death", rt, x); return; }          // the game respawned the bike
+    B.frames++;
+    if(bike_dead(bike)){ bot_end("death", rt, x); return; }
+    if(!B.started){
+        if(rt > 0){ B.started = true; B.best_x = x; B.best_t = rt; }
+        else if(B.frames > 300){ bot_end("no_start", rt, x); return; }
+    } else {
+        if(x > B.best_x + 2.0f){ B.best_x = x; B.best_t = rt; }
+        if(rt - B.best_t > B.p.stuck_s){ bot_end("stuck", rt, x); return; }
+        if(rt > B.p.max_s){ bot_end("timeout", rt, x); return; }
+    }
+    const BikeIvars& bv = bike_ivars(bike);
+    bool ground = (ground_bits(bv) & 3) != 0;
+    float pitch = atan2f(FW[4] - BW[4], FW[3] - BW[3]);
+    if(rt > B.prev_rt && B.prev_rt >= 0 && pitch == pitch && B.prev_pitch == B.prev_pitch){
+        float r = wrap_pi(pitch - B.prev_pitch) / std::max(1e-3f, rt - B.prev_rt);
+        B.rate_f = 0.5f * B.rate_f + 0.5f * r;
+    }
+    if(rt > B.prev_rt){ B.prev_pitch = pitch; B.prev_rt = rt; }
+    float rate = B.rate_f;
+    float thr = B.p.throttle, brk = 0, lean;
+    if(ground){
+        float slope = bv.gt ? atan2f(((float*)bv.gt)[1], ((float*)bv.gt)[0]) : 0.0f;
+        B.tgt_last = slope;
+        float err = wrap_pi(pitch - slope);
+        lean = B.p.kp * err + B.p.kd * rate;
+        if(err > B.p.flip_cut) thr = 0;                                       // about to loop out
+        if(!B.was_ground) B.max_air = std::max(B.max_air, rt - B.air_t0);
+        // ceiling look-ahead: launch NOW with the current velocity and follow the whole predicted flight until
+        // the wheels would land — if the rider's head (head units along the bike's up axis) enters static solid
+        // from BELOW on the way, brake (quarter-pipes under overhangs, tunnel mouths with sloping roofs).
+        B.dbg_ceil = false;
+        if(!B.slices.empty()){
+            float vx = 0.5f * (BW[17] + FW[17]), vy = 0.5f * (BW[18] + FW[18]);
+            float mx = 0.5f * (BW[3] + FW[3]), my = 0.5f * (BW[4] + FW[4]);
+            float hx = -sinf(pitch) * B.p.head, hy = cosf(pitch) * B.p.head;
+            for(int k = 2; k <= (int)(B.p.ceil_s * 60); k += 2){
+                float t = k / 60.0f, xx = mx + vx * t, yy = my + vy * t - 0.5f * B.p.gravity * t * t;
+                if(solid_kind(xx + hx, yy + hy, nullptr) == 1){ B.dbg_ceil = true; break; }
+                if(k > 6 && solid_kind(xx, yy - B.p.ride_h, nullptr) == 2) break;   // wheels back on the ground
+            }
+            if(B.dbg_ceil){ thr = 0; brk = B.p.ceil_brake; B.ceil_frames++; }
+        }
+    } else {
+        if(B.was_ground){ B.takeoff_until = rt + B.p.takeoff_s; B.air_t0 = rt; }
+        float tgt = B.tgt_last;
+        // wheels are real dynamic bodies (motoCenter_'s motion state is suspect, see above)
+        float vx = 0.5f * (BW[17] + FW[17]), vy = 0.5f * (BW[18] + FW[18]);
+        float mx = 0.5f * (BW[3] + FW[3]), my = 0.5f * (BW[4] + FW[4]), gy;
+        B.dbg_land_x = NAN;
+        for(int k = 1; k <= 240; k++){                                         // ballistic landing (4 s)
+            float t = k / 60.0f, xx = mx + vx * t, yy = my + vy * t - 0.5f * B.p.gravity * t * t;
+            float top;
+            if(!B.slices.empty()){
+                if(vy - B.p.gravity * t < 0 && solid_kind(xx, yy - B.p.ride_h, &top) == 2){
+                    float y0, y1;
+                    if(surface_near(xx - 3, top, &y0) && surface_near(xx + 3, top, &y1)) tgt = atan2f(y1 - y0, 6.0f);
+                    B.dbg_land_x = xx;
+                    break;
+                }
+                continue;
+            }
+            if(profile_y(xx, &gy) && yy - gy < B.p.ride_h){
+                float y0, y1;
+                if(profile_y(xx - 3, &y0) && profile_y(xx + 3, &y1)) tgt = atan2f(y1 - y0, 6.0f);
+                B.dbg_land_x = xx;
+                break;
+            }
+        }
+        B.dbg_target = tgt;
+        float err = wrap_pi(pitch - tgt);
+        lean = B.p.air_kp * err + B.p.air_kd * rate;
+        if(rt < B.takeoff_until && err < B.p.flip_cut) lean = -B.p.takeoff_lean;
+    }
+    for(const BotSeg& sg : B.plan) if(x >= sg.x0 && x < sg.x1){
+        if(sg.thr >= 0) thr = sg.thr;
+        if(sg.brk >= 0) brk = sg.brk;
+        lean += sg.lean;
+        break;
+    }
+    B.was_ground = ground;
+    (void)M;
+    B.dbg_pitch = pitch;
+    B.dbg_target = ground ? B.tgt_last : B.dbg_target;
+    if(brk > 0.5f) thr = 0;
+    g_input.thr = thr; g_input.brk = brk; g_input.lean = clampf(lean, -1, 1);
+    g_input.release_at = 0; g_input.dirty = true;
+}
+static std::string cmd_bot_start(const JV& a, std::string& err){
+    if(!cur_bike()){ err = "no level loaded (or the bike was not captured)"; return ""; }
+    BotState B;
+    const JV* P = a.get("params"); const JV& pp = P ? *P : a;
+    #define BP(n) B.p.n = (float)pp.num(#n, B.p.n)
+    BP(kp); BP(kd); BP(air_kp); BP(air_kd); BP(takeoff_lean); BP(takeoff_s); BP(flip_cut);
+    BP(stuck_s); BP(max_s); BP(gravity); BP(ride_h); BP(throttle); BP(head); BP(ceil_s); BP(ceil_brake);
+    #undef BP
+    const JV* X = a.get("px"); const JV* Y = a.get("py");
+    if(X && Y && X->t == JV::ARR && Y->t == JV::ARR && X->a.size() == Y->a.size()){
+        for(size_t i = 0; i < X->a.size(); i++){ B.px.push_back((float)X->a[i].n); B.py.push_back((float)Y->a[i].n); }
+    }
+    if(const JV* S = a.get("slices")){                     // {"x0":…, "dx":…, "iv":[[b,t,…],…]}
+        B.sl_x0 = (float)S->num("x0", 0); B.sl_dx = (float)S->num("dx", 0);
+        if(const JV* iv = S->get("iv")) if(iv->t == JV::ARR)
+            for(const JV& col : iv->a){
+                std::vector<float> c;
+                if(col.t == JV::ARR) for(const JV& v : col.a) c.push_back((float)v.n);
+                B.slices.push_back(std::move(c));
+            }
+    }
+    if(const JV* pl = a.get("plan")) if(pl->t == JV::ARR)  // [[x0, x1, thr, brk, lean_bias], …]
+        for(const JV& r : pl->a) if(r.t == JV::ARR && r.a.size() >= 5)
+            B.plan.push_back({(float)r.a[0].n, (float)r.a[1].n, (float)r.a[2].n, (float)r.a[3].n, (float)r.a[4].n});
+    B.active = true;
+    g_bot = std::move(B);
+    g_input.thr_down = false;                                                  // so the HUD sees a rising edge
+    char r[480];
+    snprintf(r, sizeof r, "{\"bot\":true,\"profile_points\":%d,\"slices\":%d,\"plan\":%d,\"params\":{\"kp\":%g,\"kd\":%g,\"air_kp\":%g,\"air_kd\":%g,"
+             "\"takeoff_lean\":%g,\"takeoff_s\":%g,\"flip_cut\":%g,\"stuck_s\":%g,\"max_s\":%g,\"gravity\":%g,\"ride_h\":%g,\"throttle\":%g}}",
+             (int)g_bot.px.size(), (int)g_bot.slices.size(), (int)g_bot.plan.size(), g_bot.p.kp, g_bot.p.kd, g_bot.p.air_kp, g_bot.p.air_kd, g_bot.p.takeoff_lean,
+             g_bot.p.takeoff_s, g_bot.p.flip_cut, g_bot.p.stuck_s, g_bot.p.max_s, g_bot.p.gravity, g_bot.p.ride_h, g_bot.p.throttle);
+    return r;
+}
+static std::string cmd_bot_stop(){
+    bool was = g_bot.active;
+    float rt = -1; run_time(&rt);
+    bot_end("stopped", rt, NAN);
+    return std::string("{\"was_active\":") + (was ? "true" : "false") + "}";
+}
+
 // ── GL-thread queue ──────────────────────────────────────────────────────────────────────────
 struct Job {
     std::string cmd; JV args; std::string result, error; bool done = false;
@@ -949,6 +1203,8 @@ static void run_on_gl(Job& j){
     else if(j.cmd == "scene_dump") j.result = cmd_scene_dump(j.args);
     else if(j.cmd == "trace_start") j.result = cmd_trace_start(j.args, j.error);
     else if(j.cmd == "trace_stop")  j.result = cmd_trace_stop(j.args);
+    else if(j.cmd == "bot_start")   j.result = cmd_bot_start(j.args, j.error);
+    else if(j.cmd == "bot_stop")    j.result = cmd_bot_stop();
     else j.error = "unknown command: " + j.cmd;
 }
 
@@ -964,6 +1220,7 @@ void rv_bridge_frame(bool in_level){
     }
     if(!todo.empty()) g_q_cv.notify_all();
     goto_tick(in_level);
+    bot_tick();
     input_tick();
     track_race(in_level);
     trace_tick();

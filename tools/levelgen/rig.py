@@ -139,6 +139,32 @@ class Rig:
         evs += self.events()
         return tr, evs
 
+    # ── video (local evidence; game footage — never commit it) ──
+    def record_start(self, name):
+        """Start `screenrecord` on the device (stopped by record_stop, max 180 s)."""
+        import subprocess
+        self.adb.shell("mkdir -p /sdcard/rvrec", timeout=5)
+        self._rec_remote = f"/sdcard/rvrec/{name}.mp4"
+        self._rec = subprocess.Popen(self.adb.argv("shell", f"screenrecord --bit-rate 2000000 --size 780x360 --time-limit 180 {self._rec_remote}"),
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(0.4)
+
+    def record_stop(self, local_path):
+        """SIGINT so the mp4 is finalized, pull it, delete the device copy. Returns the local path or None."""
+        if not getattr(self, "_rec", None):
+            return None
+        self.adb.shell("pkill -INT screenrecord", timeout=5)
+        try:
+            self._rec.wait(timeout=10)
+        except Exception:
+            self._rec.kill()
+        self._rec = None
+        time.sleep(0.6)
+        os.makedirs(os.path.dirname(local_path), exist_ok=True)
+        r = self.adb.run("pull", self._rec_remote, local_path, timeout=60)
+        self.adb.shell(f"rm -f {self._rec_remote}", timeout=5)
+        return local_path if r.ok and os.path.exists(local_path) else None
+
     def screenshot(self, path):
         img = screen.capture(self.adb)
         data, _, _, _ = screen.render(img, 960, True, "jpeg", 82)

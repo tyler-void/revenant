@@ -190,3 +190,25 @@ def export(level, name):
     dat = os.path.join(OUT, f"{name}.dat")
     ld.export_dat(js, dat, key)
     return dat
+
+
+# ── level-editor ref semantics (levelops.js via node — the SAME code the editor runs) ───────────
+def _node():
+    import glob
+    import shutil
+    cand = [os.environ.get("NODE"), shutil.which("node")] + sorted(glob.glob(os.path.expanduser("~/.nvm/versions/node/*/bin/node")))
+    for c in cand:
+        if c and os.path.exists(c):
+            return c
+    raise SystemExit("node not found (set NODE=/path/to/node)")
+
+
+def levelops(op, **payload):
+    """Run one levelops.js op (copy / paste / carry / lint). Non-finite reals cross as tagged objects."""
+    import subprocess
+    cli = os.path.join(os.path.dirname(os.path.abspath(__file__)), "levelops_cli.js")
+    req = json.dumps(ld.to_wire(dict(op=op, **payload)), allow_nan=False)
+    r = subprocess.run([_node(), cli], input=req, capture_output=True, text=True, timeout=60)
+    if r.returncode:
+        raise RuntimeError(f"levelops {op}: {r.stderr.strip()}")
+    return ld.from_wire(json.loads(r.stdout))

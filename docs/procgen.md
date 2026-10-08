@@ -143,6 +143,39 @@ throttle for one run each under the in-game trace (Waydroid). All numbers VERIFI
 - ⚠ **Side effect:** test rides in a career slot write that slot's best time (and probably medals) into
   the player's save (1_24 now shows BEST 9.30). Use a slot whose record doesn't matter, or accept it.
 
+### G3 in-game bot — STATUS 2026-10-09 (WIP, not accepted yet)
+Bridge `bot_start{params, px/py, slices, plan}` / `bot_stop` → event `bot_result{result, run_time, x, progress,
+ceil_frames, max_air_s}`; runs per frame on the GL thread through the `input` path. Host: `tools/levelgen/bot_eval.py`
+(`--levels 1_1-1_30 [--record] [--trace] [--params json]`). Every recorded run saves
+`~/.cache/revenant/bot/runs/<lid>/<stamp>.json` (params, plan, result, per-step actions + state) + `.mp4` (local only).
+- **Pitch source (VERIFIED):** `motoCenter_`'s angle and angVel disagree (cosine 0.04 between d(angle)/dt and
+  angVel) → the bot uses the wheel-axis angle atan2(front − back) with a filtered finite-difference rate.
+  The torso body is consistent (cosine 0.80–0.89).
+- **v0 baseline (PD to the game's ground tangent, takeoff lean, air PD to the predicted landing slope):
+  3/30 W1 levels finished (1_1, 1_4, 1_25), all 2★, bot time / gold median 1.03.** Deaths: water gaps
+  undershot (1_3, 1_12), quarter-pipe launches into overhangs (1_24), tunnel mouths, steep walls (>70°), flips.
+- **v1 (installed, partly tested):** host sends `slices` = static solid occupancy per x (`slices_of`, even-odd per
+  polygon then union); while grounded the bot predicts the launch parabola from its velocity and BRAKES if the
+  rider's head would enter solid from below (full flight, head along the bike's up axis); landing prediction
+  uses the slices (correct under overhangs). 1_24: progress 406 → 2066 of ~2430 (the overhang is passed).
+- **Determinism (VERIFIED, 2 runs):** identical bot runs on 1_24 ended at the same run_time 24.2331352 and
+  x 1980.11255 → a bot verdict is reproducible.
+- **Next:** (1) rerun W1 with the latest build (full-flight ceiling scan — untested); (2) `--search K` in
+  bot_eval: on death, read the trace (takeoff x, airborne?, pitch error) and try targeted `plan` overrides
+  (coast/brake before the takeoff, full throttle, lean bias), keep the best progress; (3) then G4.
+- ⚠ Every finished run writes the slot's best time/medals into the save (bot runs on stock W1 levels did).
+- Idea (owner, 2026-10-09): train a model (RL) — the pieces exist (deterministic physics, per-step trace
+  observations, input actions, reward = progress/finish/time, recorded runs as a dataset). Bottleneck:
+  real-time 60 Hz + ~8 s goto resets → needs an in-level restart (`HudLayer restart`, `PauseMenu btnRestart`
+  exist), fast-forward, maybe several Waydroid instances.
+
+### G4 generator v2 — `tools/levelgen/gen.py` (WRITTEN, NOT RUN YET)
+Beat plan + budget, one spline per ground run, gaps sized as a fraction of the predicted ballistic range
+(V_LIP 110, g 68), landing runs descend along the trajectory (no rider-facing walls), see-saw cloned via
+`levelops.js` (`levelops_cli.js` + `lgcore.levelops`; select the JOINT explicitly — `carrySet` drops joints
+bound to the world), bare `ExplosiveBarrel`/`Nitro` prefabs at the corpus heights (11.1 / 12.75 above ground),
+`--verify N` / `--play` / `batch`. Needs: an offline dry run, device verify, the 20-seed batch.
+
 ## 2. Web / roguelike research (synthesized, with sources)
 
 Researched 2D-trials/platformer + roguelike procgen. The recommended pipeline and
