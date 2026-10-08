@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "modkit": {
+      "command": "uv",
+      "args": ["run", "--quiet", "--project", "mobile-modkit/mcp", "modkit-mcp"],
+      "env": {
+        "ADB_SERIAL": "192.168.240.112:5555",
+        "PACKAGE": "com.miniclip.bikerivals",
+        "BRIDGE_PORT": "7777",
+        "BRIDGE_SOCKET": "revenant"
+      }
+    }
+  }
+}

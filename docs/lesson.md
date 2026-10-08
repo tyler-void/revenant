@@ -190,6 +190,9 @@
   is wrong; read the realized offset from the `_OBJC_IVAR_$_…` variable at runtime (`*(g_base+var)`).
 - **Frida is unstable on 32-bit/thumb Apportable and trips anti-tamper** — the in-process NDK
   `libmod` (inline hooks + ImGui) is the right instrument here, not Frida.
+- **Correction (2026-10-08):** the bullet below names `gameTime_` as the corrupted clock. Measured live
+  via the bridge, the HUD run timer is `Manager.time_` and `Physics.gameTime_` stays 0 in a
+  single-player race — so that mechanism is unproven; the idle-fast-path fix itself stands.
 - **Don't do per-frame work inside the physics-step hook — read game state from the OVERLAY hook.**
   (The run-timer "freeze" — RESOLVED 2026-06-15.) Running ANY body in `-[World step:]` each frame
   (even a read like `[self world]` or a chassis-velocity `msgSend`) corrupted the game's `gameTime_`,
@@ -201,3 +204,32 @@
   is actually engaged (`step_active()`); (2) **move read-only HUD work (speed) to the swap/overlay
   hook**, which is timer-safe. Rule: the physics step is sacred — run it only when the user is actively
   modifying physics (gravity/specs); everything read-only belongs in the overlay.
+
+## Agent tooling on Waydroid (Phase 1.5, 2026-10-08)
+
+- **Don't guess readiness flags — call what the buttons call, then verify a postcondition.** Three guesses
+  failed in a row (`entered_` never flips; `inputEnabled_`/`_levelDotData` are set too early;
+  `-[LevelSelectionMenu didFinishLoading]` actually fires right AFTER a level loads). What worked:
+  `loadLevelSelectionMenu` → `-[LevelDot selectAndDisplayDetail]` → `-[LevelDetail race]` (the RACE
+  button's own selector, read from its disassembly), then check the result: the lid the reader saw, the
+  bike was created, the Box2D world gained bodies — retry via `-[MotoXGame exitToMenu]` if not.
+- **`startLevelWithNumber:` with no selected dot loads an EMPTY level** (no level file read, no terrain, no
+  bike) — a failure that looks like success unless you check the postcondition.
+- **Instrument before you theorise.** Emitting `goto_wait` events with the candidate flags exposed the wrong
+  readiness guess in one run; a 3-candidate `state` sample exposed that the HUD timer is `Manager.time_`,
+  not `Physics.gameTime_` (which stays 0) — overturning a mechanism the docs had stated as fact.
+- **Measure rates with paired samples from ONE clock domain.** `state` returns `run_time` and
+  CLOCK_MONOTONIC sampled on the GL thread in the same frame; adb round-trips would add noise bigger than
+  the effect. Result: the game adds exactly 1/60 s per frame, so the timer runs at fps/60 (≈1.016 at
+  Waydroid's ~61 fps) — a game property, not a mod bug.
+- **Read ivars by name through the game's own ObjC runtime** (`object_getInstanceVariable` +
+  `ivar_getOffset`, exported by libgame, via `dlsym`) — realized offsets, no hardcoding, works under
+  houdini. It turned "find the offset" sessions into one bridge call.
+- **Waydroid gotchas:** the container FREEZES when no window is shown (every `adb shell` hangs) →
+  `persist.waydroid.suspend false`; `/proc/uptime` and `boot_id` are the HOST's → detect an Android restart
+  by a new `system_server` PID; `waydroid` is a `#!/usr/bin/env python3` script → inside a venv it loses the
+  system `dbus` module (strip the venv from PATH); `screencap` works (black on the phone).
+- **An abstract unix socket has no filesystem permissions.** A dev bridge that can execute arbitrary
+  methods must check `SO_PEERCRED` (accept uid 0/2000 only) and stay off by default.
+- **Fast native loop = swap one file inside the APK.** `zip` the new `libmod.so` over the old entry, re-sign
+  with the same key, `install -r`: 3–8 s per iteration instead of an apktool rebuild.

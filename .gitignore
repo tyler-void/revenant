@@ -65,3 +65,7 @@ lvl_*.png
 mod/imgui/
 wasm/target/
 web/public/*.wasm
+
+# Python tooling (mobile-modkit/mcp): virtualenv + caches; uv.lock IS committed
+.venv/
+.pytest_cache/

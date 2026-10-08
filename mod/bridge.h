@@ -2,7 +2,8 @@
 // Host side: `adb forward tcp:7777 localabstract:revenant`, then one JSON object per line:
 //   -> {"id":1,"cmd":"state","args":{}}      <- {"id":1,"ok":true,"result":{...}}
 // Commands that touch game objects are queued and run on the GL thread from the swapBuffers hook
-// (rv_bridge_frame); nothing here ever runs inside the physics step (gameTime_ stays untouched).
+// (rv_bridge_frame); nothing here ever runs inside the physics step, which must stay idle for the run
+// timer to stay correct. The HUD run timer is Manager.time_ (+1/60 s per physics step, one step per frame).
 // Every event is also logged as one logcat line "RVEVT {json}" (tag RVMOD), so log watchers work
 // even when the socket doesn't.
 #pragma once
@@ -34,7 +35,7 @@ void rv_note_level_file(const char* basename);
 // level_loaded / finish helpers for the MotoXGame hooks.
 void rv_on_level_loaded(id game);            // game = MotoXGame (self of levelLoaded:)
 void rv_on_level_finished(id arg);
-// -[LevelSelectionMenu didFinishLoading] fired: the career map is built and safe to start a level from.
+// -[LevelSelectionMenu didFinishLoading] fired (observed right after a level loads; diagnostic only).
 void rv_on_menu_ready(id menu);
 // A game CCLayer finished entering (-[CCLayer onEnterTransitionDidFinish]): emits scene_ready.
 void rv_on_layer_enter(id layer);

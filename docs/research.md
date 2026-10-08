@@ -185,6 +185,16 @@ over-spine** model — "playable by construction," not by luck:
 How the racing ghost works, and why it rendered garbled when `gameTime_` was corrupted
 (the mod-menu step-hook bug — see [modmenu.md](modmenu.md)).
 
+> ⚠ **Correction (2026-10-08, VERIFIED live via the agent bridge):** the HUD run timer is
+> **`Manager.time_`** (it tracks the HUD label: 1.50 / 5.63 while the HUD showed 1.55 / 5.68), and it
+> advances exactly 1/60 s per physics step with one step per rendered frame. **`Physics.gameTime_` stays
+> 0** during a single-player race (read on both the Manager's Physics and the step hook's own). So the
+> mechanism written below — "the step body corrupted `gameTime_`" — is NOT proven. What IS proven: the
+> empirical fix (idle fast-path: nothing runs in the step hook unless gravity/specs are on), and that with
+> reader=1 the timer runs at exactly fps/60 (ratio 1.0157 at 60.94 fps on Waydroid,
+> `tools/device/acceptance_bridge.py`). The only `updateTimer` in libgame is
+> `-[OutOfGasPopup updateTimer]`@0x5c1b2c (gas refill), so `updateTimer@0x5c1a94` below is wrong.
+
 **Addresses VERIFIED (2026-10-08):** every ghost address below is the +8 IMP of the selector
 named next to it (reverse lookup over the method tables). The behaviour descriptions are
 INFERRED from names/ivars plus the observed garbled-ghost symptom, not traced call-by-call.

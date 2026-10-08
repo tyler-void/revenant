@@ -51,7 +51,7 @@ extern "C" {
 #define OFF_CLICKSTATS 0x5a3db0 // -[? clickStats:] — Stats button handler (online; fails offline)
 #define OFF_LVLLOADED   0x6df2fc // -[MotoXGame levelLoaded:(id)]   — once per level load (bridge events)
 #define OFF_LVLFINISHED 0x6e01ec // -[MotoXGame levelFinished:(id)] — once per finish (bridge events)
-#define OFF_LSM_READY   0x567868 // -[LevelSelectionMenu didFinishLoading] — fires when a level STARTS loading
+#define OFF_LSM_READY   0x567868 // -[LevelSelectionMenu didFinishLoading] — fires right after a level loads
 #define OFF_LAYER_ENTER 0x48bc54 // -[CCLayer onEnterTransitionDidFinish] — a menu/layer finished entering
 // _OBJC_IVAR_$_BikeCommon1.backWheel_ — the ObjC runtime writes the REALIZED ivar offset here at
 // load (Apportable realizes class layouts at runtime, so it is NOT the static 0x54). Read it at

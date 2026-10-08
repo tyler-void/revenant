@@ -19,6 +19,15 @@ right one:
   mistakes (the *how not to fail*).
 - **[docs/steps.md](docs/steps.md)** — copy-paste runbook for every workflow (the *how-to*).
 
+## 🤖 Device work → use the modkit MCP, not raw adb
+
+Every device session starts with the **`modkit` MCP server** (registered in `.mcp.json`, code in
+`mobile-modkit/mcp/`): `device_ensure` → `app_launch` → `bridge_call` (in-game state/events/
+goto_level, needs `bridge=1` in `mods/rvdebug.txt`) → `logs_wait_for` → input → ONE `screen_shot` as
+proof. Don't navigate by screenshots. Rebuild libmod with `tools/device/modloop.sh` (3–8 s). Full
+manual + gotchas: **[mobile-modkit/SKILL.md](mobile-modkit/SKILL.md)**; reference run:
+`tools/device/acceptance_bridge.py`.
+
 This file (CLAUDE.md) is the agent-facing quick index; the `docs/` files are the
 deeper human/community-facing record. Keep both current.
 
@@ -56,6 +65,8 @@ the rest are WIP.)
   live **gravity** (−30×…+30×), **camera zoom** (flexible/locked), **bike specs**
   (max speed/accel/handling/nitro[capped]/burnout, per-bike-safe), **debug HUD** (FPS/RAM/CPU +
   opt-in **speed** = chassis `heroTorso` b2Body velocity, read in the overlay hook), **Reset Progress**.
+  ⚠ 2026-10-08: the HUD run timer is `Manager.time_` (VERIFIED via the bridge); `Physics.gameTime_`
+  stays 0 in single-player, so the `gameTime_` mechanism below is unproven (the fix stands).
   ✅ **RUN-TIMER FREEZE FIXED (2026-06-15) + ghost fixed.** Root cause (proven by live-bisect, NOT
   theory): the **per-frame step-hook BODY** corrupted `gameTime_` — NOT anti-tamper, NOT the spec/
   gravity writes (the `dt` handed to `step:` is a perfect real-time 1/60, ratio≈1.0). The old "gate the

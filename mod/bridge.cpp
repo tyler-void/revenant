@@ -265,13 +265,14 @@ void rv_note_level_file(const char* base){
 static std::string cur_lid(){ std::lock_guard<std::mutex> lk(g_lid_mu); return g_lid; }
 
 void rv_on_menu_ready(id menu){
-    rv_event("menu_ready", ("\"menu\":" + js(cname(menu)) + ",\"ptr\":" + jp(menu)).c_str());
+    // Despite the name this fires right AFTER a level loads (the loading screen finished), not when the
+    // career map is ready (VERIFIED by event order) — kept as a diagnostic event, not a readiness signal.
+    rv_event("menu_did_finish_loading", ("\"menu\":" + js(cname(menu)) + ",\"ptr\":" + jp(menu)).c_str());
 }
+static bool run_time(float* out);   // Manager.time_ (defined with the Box2D helpers below)
 void rv_on_level_finished(id arg){
-    float gt = -1.0f;
-    id phys = R.physics ? *R.physics : 0;
-    if(phys) ivar_float(phys, "gameTime_", &gt);
-    std::string f = "\"lid\":" + js(cur_lid().c_str()) + ",\"game_time\":" + jf(gt) +
+    float rt = -1.0f; run_time(&rt);
+    std::string f = "\"lid\":" + js(cur_lid().c_str()) + ",\"run_time\":" + jf(rt) +
                     ",\"arg_class\":" + js(cname(arg));
     rv_event("finish", f.c_str());
 }
@@ -279,12 +280,11 @@ void rv_on_level_finished(id arg){
 // Race tracking from the GL thread: race_start = gameTime_ first moves after a level load.
 static void track_race(bool in_level){
     if(!in_level) return;
-    id phys = R.physics ? *R.physics : 0;
     float gt;
-    if(!phys || !ivar_float(phys, "gameTime_", &gt)) return;
+    if(!run_time(&gt)) return;
     if(!g_race_started && g_last_gt >= 0.0f && gt > g_last_gt){
         g_race_started = true;
-        rv_event("race_start", ("\"lid\":" + js(cur_lid().c_str()) + ",\"game_time\":" + jf(gt)).c_str());
+        rv_event("race_start", ("\"lid\":" + js(cur_lid().c_str()) + ",\"run_time\":" + jf(gt)).c_str());
     }
     g_last_gt = gt;
 }
@@ -293,7 +293,13 @@ static void track_race(bool in_level){
 // b2Body layout (Box2D 2.1-era, matches the device-proven m_linearVelocity@0x44 / m_jointList@0x70):
 // m_world@0x5c, m_prev@0x60, m_next@0x64. Bodies are prepended to the world list, so walking m_prev
 // from Physics._groundBody (created first) and m_next back gives the world's body count.
-static id manager(){ Class c = R.getClass("Manager"); return c ? m0((id)c, "sharedManager") : 0; }
+static id g_mgr = 0;                                    // +[Manager sharedManager] is a singleton: cache it
+static id manager(){
+    if(!g_mgr){ Class c = R.getClass("Manager"); g_mgr = c ? m0((id)c, "sharedManager") : 0; }
+    return g_mgr;
+}
+// The HUD run timer is Manager.time_ (VERIFIED live: tracks the HUD label; Physics.gameTime_ stays 0).
+static bool run_time(float* out){ id m = manager(); return m && ivar_float(m, "time_", out); }
 static id cur_physics(){                                  // via the Manager: never a stale step pointer
     id mgr = manager(); char* w; const char* t;
     return mgr && ivar_loc(mgr, "physics_", &w, &t) ? *(id*)w : 0;
@@ -468,11 +474,16 @@ static std::string cmd_state(){
     if(phys){
         // game_time and mono are sampled together on the GL thread in this frame: use THEM for
         // timer-rate checks (not host wall clock, which adds two adb round-trips of noise).
-        r += ",\"game_time\":" + ivar_json(phys, "gameTime_");
+        r += ",\"physics_game_time\":" + ivar_json(phys, "gameTime_");
         r += ",\"bodies\":" + ji(count_bodies(cur_physics()));
         r += ",\"time_step\":" + ivar_json(phys, "timeStep_");
         r += ",\"step\":" + ivar_json(phys, "step_");
     }
+    id sp = R.physics ? *R.physics : 0;               // the Physics the step hook last saw (valid in-level)
+    if(sp && g_in_level){
+        r += ",\"step_physics\":" + jp(sp) + ",\"step_count\":" + ivar_json(sp, "step_");
+    }
+    { float rt; if(run_time(&rt)) r += ",\"run_time\":" + jf(rt); }   // HUD timer, sampled with mono
     r += ",\"race_started\":" + std::string(g_race_started ? "true" : "false");
     r += ",\"step_calls\":" + ji(R.step_calls ? *R.step_calls : -1);
     r += ",\"bike_gen\":" + ji(R.bike_gen ? *R.bike_gen : -1);
@@ -545,6 +556,11 @@ static std::string cmd_call(const JV& a, std::string& err){
     if(ret == "f"){ float f; memcpy(&f, &r, 4); return "{\"value\":" + jf(f) + "}"; }
     if(ret == "i") return "{\"value\":" + ji((int32_t)r) + "}";
     if(ret == "B") return "{\"value\":" + ji(r & 0xff) + "}";
+    if(ret == "s"){                                   // NSString -> text
+        id str = (id)(uintptr_t)r;
+        const char* c = str ? (const char*)((id(*)(id,SEL))R.msgSend)(str, sel("UTF8String")) : 0;
+        return "{\"value\":" + (c ? js(c) : std::string("null")) + "}";
+    }
     id v = (id)(uintptr_t)r;
     return "{\"value\":" + (v ? "{\"ptr\":" + jp(v) + ",\"class\":" + js(cname(v)) + "}" : std::string("null")) + "}";
 }
