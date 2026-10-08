@@ -162,9 +162,9 @@
 - **Tilt needs no `HIGH_SAMPLING_RATE_SENSORS`:** `register()` uses `SENSOR_DELAY_GAME`
   (~50 Hz, under the 200 Hz gate). End users only grant "Motion"/sensor access; nothing else.
 
-## Mod menu vs the run timer (Phase 6) — UNRESOLVED, and a lesson in not over-claiming
+## Mod menu vs the run timer (Phase 6) — RESOLVED 2026-06-15, and a lesson in not over-claiming
 
-- **OPEN BUG (not solved):** with `libmod` active the in-race level timer freezes at 0.00 on normal
+- **History (2026-06-14, since RESOLVED — see the last bullet):** with `libmod` active the in-race level timer freezes at 0.00 on normal
   single-player levels. Overlay-only (hooks installed but passing through) counts; running the
   game-logic hook bodies freezes it — but **no single culprit was consistently isolated** (the same
   config that counted in one round froze in a later build). Leaderboard anti-tamper is *plausible*

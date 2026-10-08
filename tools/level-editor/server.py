@@ -12,8 +12,8 @@ tools/level-editor/levels/ (gitignored). Populate that cache first with:
 
 Phase 3: full EDITOR — render, drag control points / move entities, edit
 properties + medal times, Save (→ cache JSON), and Export (→ encrypted .dat via
-the unidbg cipher oracle). Per-level keys live in levels/keys.json (gitignored,
-never committed). Localhost-only, no external deps.
+the unidbg cipher oracle). The level key lives in levels/keys.json (gitignored,
+never committed) — stored per lid for convenience, but all levels share one universal key. Localhost-only, no external deps.
 """
 import json, os, sys, glob
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer

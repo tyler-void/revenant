@@ -173,6 +173,14 @@ procedural-layouts · blackshellmedia.com six-principles.
 
 ## 4. World 5 registration (RE — for the additive world)
 
+> **Address audit (2026-10-08) — VERIFIED.** Re-derived with the +8 method-table rule (reverse
+> lookup: which entry's IMP equals the address): `getWorldPanelForIndex:`@0x56bacc,
+> `initWithTarget:worldBoundary:`@0x456ff4, `createLevelInfo:universe:levels:starting:`@0x6b643c,
+> `getTotalLevels:`@0x6a6190 and `getFirstLockedWorld`@0x6b0ed0 are each the IMP of exactly the
+> selector named here. None were off by one, so the "static RE exhausted" conclusion below was
+> not built on mislabelled addresses (owning classes are not yet recovered — see the Phase-3
+> ObjC annotator).
+
 Goal: add a 5th world hosting generated levels without disturbing existing worlds
 or Halloween/Christmas.
 
@@ -228,8 +236,10 @@ theme + nav), in hard objc-dispatch territory. Three ways forward:
    bike-gate work lacked. Stand up the LevelSelectionMenu/WorldPanel objects in unidbg,
    call the creation path, observe where `_comingSoon` is set and on what condition,
    then patch that condition. Highest effort, highest fidelity.
-2. **Mod-loader (Phase 4 roadmap)** — redirect asset loads to an external `mods/` folder
-   via `CCFileUtils fullPathForFilename:`; ship generated levels as REPLACEMENTS for
+2. **Mod-loader (Phase 4 roadmap — DONE 2026-06-14)** — redirect level loads to an external
+   `mods/` folder via libmod's hook on the encrypted-file reader
+   `+[NSData DataWithContentsOfFile:Password:]`@0x64ec3c (not `CCFileUtils`; see
+   [modmenu.md](modmenu.md)); ship generated levels as REPLACEMENTS for
    existing slots without touching world registration. Sidesteps the comingSoon gate
    entirely; the cleanest path to "custom levels load".
 3. **Designate a late campaign slot** as the custom/generated slot (e.g. last level of
@@ -317,7 +327,7 @@ patch the world-limit (≥4 → ≥12) so World 5's panel isn't flagged coming-s
 
 **STATUS: deep multi-session dynamic-RE in progress.** Toolkit proven, problem narrowed
 to "find WorldPanel's creation method". Pragmatic alternatives for rideable generated
-levels SOONER remain the mod-loader (CCFileUtils redirect) or a designated slot.
+levels SOONER remain the mod-loader (libmod reader hook @0x64ec3c — done) or a designated slot.
 
 ## 5. Open questions / bugs
 - **Barrels not visible on device** (generated W1L4 reported 2 barrels, none seen).

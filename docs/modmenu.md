@@ -49,9 +49,9 @@ Two device-instrumented findings this session:
   and there's no 1-2-3 countdown ("just go"). Signature of the run-timer/countdown state not
   latching — i.e. elapsed = `gameTime_ − startTimeStamp` with `startTimeStamp` chasing `gameTime_`
   every frame. Located in libgame: ivars **`gameTime_`** + **`startTimeStamp`**, method
-  **`-[… updateTimer]`@0x5c1a94** (dispatches to sub-methods). Root cause within that path is still
-  OPEN — NOT yet fixed. Next: read `gameTime_`/`startTimeStamp` each frame (find their realized ivar
-  offsets) and/or bisect which libmod hook perturbs the countdown via `rvdebug.txt`.
+  **`-[… updateTimer]`@0x5c1a94** (dispatches to sub-methods). *(Superseded: the root
+  cause — the step-hook body corrupting `gameTime_` — was found and fixed on 2026-06-15; see the top
+  of this file.)*
 
 **Symptom (device-confirmed, consistent, on plain single-player / no-ghost levels):** with `libmod`
 active, the in-race level timer (top-right) stays stuck at `0.00` — the run never registers as
@@ -216,6 +216,7 @@ that also unlocks the ImGui menu). Pipeline, all device-verified:
   format); name them `<world>_<level>.dat`. Same mechanism covers bikes/configs.
 - DEAD END that wasted a round: `loadLevelInfo:FileName:`@0x6e25dc only processes the
   Info object's medal-time floats — it IGNORES FileName. The geometry is read via 0x64ec3c.
+  (Address VERIFIED 2026-10-08: 0x6e25dc is the +8 IMP of `loadLevelInfo:FileName:`.)
 - **Autonomous testing rig:** `adb shell screenrecord` captures the GL surface (unlike
   `screencap` = black) → `ffmpeg` 1 frame → readable; `adb shell input tap/swipe` in
   landscape 2340×1080 coords. Lets the agent see + drive the game without the user.

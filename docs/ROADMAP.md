@@ -21,7 +21,7 @@ re-encrypt with the game's own writer. The plaintext is JSON (Catmull-Rom spline
 |---|---|---|---|
 | 1 | **Bike editor** (modify + clone-to-create bikes) | 🟢 Easy | ✅ editor done (CLI + web UI); new-bike *roster registration* gated on Phase 2 |
 | 2 | **Level-decrypt spike** (unidbg → JSON → schema) | 🟡 Medium | ✅ SOLVED — Blowfish decrypt+encrypt, full round-trip, universal level key |
-| 3 | **Level editor** (splines + object palette → re-encrypt) | 🟡 Medium | ✅ **beta** — viewer + drag-edit + save/export + themed render, device-verified; render fidelity community-refined |
+| 3 | **Level editor** (splines + object palette → re-encrypt) | 🟡 Medium | 🚧 **beta** — viewer + drag-edit + save/export + themed render, device-verified; object palette NOT implemented yet; render fidelity WIP |
 | 4 | **World 5 = Custom/Community Levels** (the delivery mechanism) | 🟡 Medium | 🚧 mod-loader ✅ (drop `mods/<w>_<l>.dat`, no root); additive World-5 slot paused ([procgen.md](procgen.md)) |
 | 5 | **Procedural level generator** (random/seeded tracks) | 🟡 Medium | ✅ done — `levelgen.py` rolling-hills tracks, generate→encode→device-verified |
 | 6 | **ImGui mod menu** (in-game hub: live tuning) | 🟠 Med-Hard | 🟡 works — live gravity/zoom/bike specs/HUD, device-verified ([modmenu.md](modmenu.md)) |
@@ -71,7 +71,10 @@ materialize the refs or the ObjC method IMPs). **So decryption requires the bina
 unidbg, passing an `NSString` path, and read the returned `NSData`. The remaining work is Foundation
 object construction in unidbg. Codec/loader offsets are catalogued in ASSET-FORMATS.
 
-### Phase 3 — Level editor ✅
+### Phase 3 — Level editor 🚧 (beta)
+
+> **Status:** beta. Decode → drag-edit → save/export → device-loadable works; the object
+> **palette is not implemented yet**, and WYSIWYG render fidelity is still imperfect.
 
 PC editor (web): decrypt a level → render the Catmull-Rom spline + objects → drag control points,
 drop elements from the palette → export JSON → re-encrypt via the game's cipher.

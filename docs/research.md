@@ -185,6 +185,10 @@ over-spine** model — "playable by construction," not by luck:
 How the racing ghost works, and why it rendered garbled when `gameTime_` was corrupted
 (the mod-menu step-hook bug — see [modmenu.md](modmenu.md)).
 
+**Addresses VERIFIED (2026-10-08):** every ghost address below is the +8 IMP of the selector
+named next to it (reverse lookup over the method tables). The behaviour descriptions are
+INFERRED from names/ivars plus the observed garbled-ghost symptom, not traced call-by-call.
+
 - **Record** (during a run, while `ghostRecording_`): a `GhostRecorder`
   (`createGhostRecorder`@0x6253c4 → `ghostRecorder_`, `getGhostRecorder`@0x6e2818).
   `recordGhostSprites:`@0x61b5f0 samples the rider's part transforms over time into

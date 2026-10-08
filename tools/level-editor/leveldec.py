@@ -4,7 +4,7 @@ Revenant Level Editor — decode/encode core.
 
 A Bike Rivals level ships as `<world>_<level>.dat`:
 
-    .dat → strip "<len>\\0" → DECRYPT (per-level key) → GUNZIP → binary plist
+    .dat → strip "<len>\\0" → DECRYPT (one universal level key) → GUNZIP → binary plist
 
 The DECRYPT step uses the game's own cipher and is done by the unidbg oracle
 (tools/unidbg/.../LevelCodec.java, key via BR_KEY) — see decrypt_dat(). Once
@@ -260,7 +260,8 @@ def encrypt_to_dat(gz_payload_path, key_hex, out_path):
 
 
 def keyfile_path():
-    """Local, gitignored map of level → captured key (hex)."""
+    """Local, gitignored map of level → captured key (hex). Every level shares ONE universal
+    key; the map stays keyed per lid only for convenience (the same hex under each lid)."""
     return os.path.join(CACHE, "keys.json")
 
 

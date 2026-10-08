@@ -1,5 +1,10 @@
 # Bike Rivals 1.5.2 — Level Maker Feasibility
 
+> ⚠️ **SUPERSEDED (historical feasibility notes).** The format guesses below are wrong: levels are
+> **Blowfish** (one universal 24-byte level key) → **gzip** → **binary plist** — not a keystream-XOR
+> stream cipher over JSON. Current, verified facts: [research.md](research.md) (cipher + level
+> schema) and [steps.md](steps.md) (decode/edit/encode runbook).
+
 **Verdict: feasible and *easier* than the unlock work** — the format is decryptable +
 JSON (human-readable), and the engine ships a symmetric encrypting writer.
 
