@@ -221,6 +221,10 @@ over-spine** model — "playable by construction," not by luck:
 
 ## Open questions (TODO research)
 
+- **`categoryBits "0000"` statics (377 of 2057 static ground objects, 334 untextured):** in plain Box2D a
+  category of 0 collides with nothing, so these would be inert helpers — unless the game substitutes a
+  default for 0. Check with a full-level trace where the ridden path crosses one (G3 bot runs).
+
 - **Is the game frame-capped? (owner, 2026-10-08 — noted, not fixed.)** VERIFIED on Waydroid: the HUD run
   timer (`Manager.time_`) adds exactly 1/60 s per rendered frame and physics steps once per frame, so at
   ~61 fps the timer runs ~1.6–2% fast. If nothing caps the frame rate, a 90/120 Hz phone would run the

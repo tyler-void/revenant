@@ -114,6 +114,35 @@ Aggregates only. VERIFIED = measured from the data; the *reading* of a number is
   median 82, thickness 14). The other single-revolute bodies are wheels/arms (INFERRED).
 - Trigger links (`objects` lists): 6.4/level, mostly WaterTrigger/EditorTrigger → bodies.
 
+### G2 terrain encoding experiment (2026-10-08) — `tools/levelgen/exp_encoding.py`
+One generated track (flat start, rolling hills ±10 / λ 220, an ~8° kicker, a 25-unit gap, a downhill
+landing run, finish at x 1200) encoded three ways, loaded into slot 1_24 via `mods/`, ridden at full
+throttle for one run each under the in-game trace (Waydroid). All numbers VERIFIED from that run:
+
+| encoding | objects / vertices | Box2D bodies added | finish (run_time) | fall-through | min wheel clearance | \|Δω\| p99 per step | \|Δω\| mean at slab seams / elsewhere |
+|---|---|---|---|---|---|---|---|
+| (a) one polygon per ground run (surface every 4 u) | 2 / 337 | 19 | 9.300 s | no | 1.19 | 3.81 | 0.50 / 0.62 |
+| (b) one spline per ground run (ctrl every 25 u) | 2 / 63 | 19 | 9.333 s | no | 1.18 | 3.39 | 0.39 / 0.56 |
+| (c) 24-unit quad slabs (old generator) | 55 / 220 | 72 | 9.300 s | no | 1.54 | 3.53 | 0.48 / 0.56 |
+
+- **All three load and ride.** Large (337-vertex, concave) polygons and splines are fine: the old
+  "single big polygon falls through" failure was something else (that polygon's shape, not its size).
+- **One Box2D body per EditorPhysicsObject** (bodies added = ground objects + 17 for bike/finish/etc.).
+- **No seam effect measured:** chassis |Δω| is no larger at slab seams than elsewhere (same seam x list
+  applied to (a)/(b) as a control). Seams aren't a problem at these speeds, but slabs cost 27× the bodies.
+- **The game's spline physics follows the smoothed Catmull-Rom curve (INFERRED, n=39):** grounded
+  back-wheel clearance above our Catmull-Rom reference on the hills = 2.30 (spline) vs 2.32 (fine
+  polygon = the curve itself) vs 2.45 (slabs = 24-unit chords).
+- **Spline gotcha (VERIFIED offline):** the game's spline is a CLOSED Catmull-Rom over all vertices, so
+  the bottom corners are the neighbours of the end segments and bulge the surface by up to ~6 units at
+  each run end (a bump on the kicker lip). Fix in `lgcore.encode_spline`: a straight 2-unit stub
+  (segments=1) at each run end; deviation then ≤0.02.
+- **DECISION: (b) spline** for the generator: works, 5× fewer vertices than (a), smooth physics, and
+  it's how the real levels are authored (17 of 1_24's 25 static grounds are splines). Keep (a) as the
+  fallback when exact control of the physics outline matters.
+- ⚠ **Side effect:** test rides in a career slot write that slot's best time (and probably medals) into
+  the player's save (1_24 now shows BEST 9.30). Use a slot whose record doesn't matter, or accept it.
+
 ## 2. Web / roguelike research (synthesized, with sources)
 
 Researched 2D-trials/platformer + roguelike procgen. The recommended pipeline and

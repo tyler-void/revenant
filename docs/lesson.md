@@ -24,7 +24,11 @@
 - **The ground is MANY small polygons, not one big shape** (median 46 polygons/level, median
   4 vtx, 72% ≤8 vtx). ⚠ 2026-10-08: "must be CCW" and "≤8 vertices" are NOT rules — 1_25 alone has
   53 CW physics polygons, and long polygons exist. The old fall-through came from one specific
-  generated polygon; which encoding the loader accepts is tested in the G2 experiment (procgen.md).
+  generated polygon. G2 (procgen.md) VERIFIED that one 337-vertex concave polygon, one spline, and 55
+  quad slabs all load and ride the same track; the generator now emits one spline per ground run.
+- **A spline ground is a CLOSED Catmull-Rom** — the bottom corners bend the end segments (≈6-unit bump
+  at a run end). Put a straight 2-unit stub (segments=1) at each run end.
+- **Test rides write the slot's best time / medals into the save.** Pick the test slot knowingly.
 - **Type fidelity** in plists: int vs real usually doesn't matter (the game reads
   NSNumber), but be deliberate. JSON preserves int/float via the `.0`.
 - **To make generated levels feel hand-built, CLONE real prefabs — don't invent
