@@ -53,13 +53,13 @@ extern "C" {
 // runtime to find backWheel_ on the bike. The wheel is a PhysicsObject; its [body] = b2Body*.
 #define OFF_BACKWHEEL_IVAROFF 0xd1ccd4
 // A PhysicsObject (the back wheel OR the heroTorso chassis) stores its b2Body* at this realized ivar
-// offset; b2Body.m_linearVelocity is at body+0x44 (x) / +0x48 (y). (Earlier notes blamed the
-// per-frame ObjC speed read for the run-timer freeze — that is UNPROVEN: the timer freezes with the
-// speed read OFF too, see modmenu.md — so it is not a constraint on how we read speed here.)
+// offset; b2Body.m_linearVelocity is at body+0x44 (x) / +0x48 (y). The speed is read from the
+// overlay (swap) hook, never inside -[World step:]: running any body in the step hook corrupts
+// gameTime_ (the run-timer/ghost bug, fixed 2026-06-15 — see docs/modmenu.md).
 #define OFF_WHEEL_BODY_IVAR 0xf4
-// Debug flags file (app-readable, no root). Reloaded ~1/s; lets us toggle each game-logic hook
-// LIVE to bisect what interferes with the run timer — no rebuild/reinstall. Missing/empty = all on.
-// Format: one "key=0/1" per line. Keys: step, draw, reader, ach, specs, speed.
+// Debug flags file (app-readable, no root). Read once when the hooks install, so toggling a hook
+// = edit the file + force-stop/relaunch (no rebuild/reinstall). Missing file = the defaults below.
+// Format: one "key=0/1" per line. Keys: step, draw, reader, ach, specs.
 #define DBGFLAGS_FILE MODS_DIR "/rvdebug.txt"
 // app-private save dir (mod runs as the app UID -> rw, no root): ghosts g_*.dat, data.dat
 #define SAVE_DIR "/data/data/com.miniclip.bikerivals/files/Contents/Resources"
@@ -77,10 +77,9 @@ static Class cls_NSString = 0;
 
 // ── hook enables (also live-overridable via rvdebug.txt for bisecting) ───────────────────────
 // Each game hook passes straight through when its flag is 0. `reader` (the mod-loader) defaults
-// OFF: it inline-hooks the encrypted-data/decrypt method, which the game's leaderboard/ghost
-// anti-tamper detects and responds to by FREEZING the run timer. So custom-level loading is opt-in
-// (set reader=1 in <mods>/rvdebug.txt) and understood to break timed/leaderboard runs. The rest
-// default ON; they don't write guarded state at default (gravity/specs gate on mult != 1).
+// OFF: it was a suspect during the run-timer hunt, which was later traced to the step-hook body
+// (not anti-tamper, not the reader). Opt in with reader=1 in <mods>/rvdebug.txt. The rest default
+// ON; the step hook takes an idle fast-path unless gravity/specs are engaged (step_active()).
 static int g_en_step=1, g_en_draw=1, g_en_reader=0, g_en_ach=1, g_en_specs=1;
 static void reload_flags(){
     FILE* f=fopen(DBGFLAGS_FILE,"r"); if(!f) return;   // no file -> keep defaults (all on)
@@ -567,7 +566,8 @@ static void draw_menu(){
             ImGui::TextDisabled("On crash: Ragdoll = launch the rider;");
             ImGui::TextDisabled("Dismember = blow the limbs apart.");
             ImGui::Spacing();
-            ImGui::TextDisabled("Mod-loader: ON");
+            ImGui::TextDisabled(g_en_reader ? "Mod-loader: ON (mods/<w>_<l>.dat)"
+                                            : "Mod-loader: OFF (reader=1 in rvdebug.txt)");
             ImGui::Separator();
             if(!g_reset_confirm){
                 if(ImGui::Button("Reset Progress (ghosts + medals)")) g_reset_confirm = true;
@@ -793,7 +793,7 @@ static void* waiter(void*){
     return 0;
 }
 __attribute__((constructor)) static void on_load(){
-    LOGI("libmod.so loaded");
+    LOGI("libmod.so loaded (build %s %s)", __DATE__, __TIME__);   // BUILDTAG: confirms which build is live
     dl_iterate_phdr(find_cb,0);
     if(g_base) install_hooks();
     else { pthread_t th; pthread_create(&th,0,waiter,0); }
