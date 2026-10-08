@@ -22,6 +22,7 @@ extern "C" {
 #include <GLES2/gl2.h>
 #include "imgui.h"
 #include "backends/imgui_impl_opengl3.h"
+#include "bridge.h"
 
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  "RVMOD", __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "RVMOD", __VA_ARGS__)
@@ -32,15 +33,15 @@ extern "C" {
 #define OFF_MSGSEND_STRET 0x378578  // objc_msgSend_stret (isa from r1; r0=hidden CGPoint ret ptr)
 #define OFF_SELREG   0x3775e0
 #define OFF_GETCLASS 0x37295c
-#define OFF_SWAP     0x4d095c   // -[CC*View swapBuffers] (ARM) — called each frame before present
+#define OFF_SWAP     0x4d095c   // -[CCGLView swapBuffers] (ARM) — called each frame before present
 // Miniclip native touch handlers (from libgame dynsym). Called by the JNI
 // nativeTouches* after converting MotionEvent floats -> ints: M*(id=r0, x=r1, y=r2, d=r3).
 #define OFF_MDOWN    0x701958   // MtouchDown
 #define OFF_MUP      0x701c20   // MtouchUp
 #define OFF_MMOVE    0x702000   // MtouchMove
 #define OFF_SETGRAV  0x64d3a4   // -[GameLayer setGravity:(b2Vec2)] — gx=r2, gy=r3 (float bits)
-#define OFF_STEP     0x64d510   // -[World step:(ccTime)] — per-frame physics tick (drives gravity)
-#define OFF_DRAW     0x648eec   // -[GameLayer draw] — per-frame; owns setCameraZoom: (drives zoom)
+#define OFF_STEP     0x64d510   // -[Physics step:(ccTime)] — per-frame physics tick; self owns gameTime_
+#define OFF_DRAW     0x648eec   // -[GameScene draw] — per-frame; owns setCameraZoom: (drives zoom)
 #define OFF_SETSPEED   0x66e1cc // -[Bike setSpeedLimit:(float)]      (value = r2)
 #define OFF_SETNITRO   0x66e2a4 // -[Bike setNitroPerformance:(float)]
 #define OFF_SETFORCE   0x66e214 // -[Bike setForceScale:(float)]
@@ -48,6 +49,9 @@ extern "C" {
 #define OFF_SETWHEELIE 0x66e37c // -[Bike setMaxWheelieSpeed:(float)]
 #define OFF_PROCCOND 0x50e104  // -[ConditionManager processConditionInfo:Achievements:] (info=r2, achs=r3 BOOL)
 #define OFF_CLICKSTATS 0x5a3db0 // -[? clickStats:] — Stats button handler (online; fails offline)
+#define OFF_LVLLOADED   0x6df2fc // -[MotoXGame levelLoaded:(id)]   — once per level load (bridge events)
+#define OFF_LVLFINISHED 0x6e01ec // -[MotoXGame levelFinished:(id)] — once per finish (bridge events)
+#define OFF_LSM_READY   0x567868 // -[LevelSelectionMenu didFinishLoading] — career map built (bridge goto)
 // _OBJC_IVAR_$_BikeCommon1.backWheel_ — the ObjC runtime writes the REALIZED ivar offset here at
 // load (Apportable realizes class layouts at runtime, so it is NOT the static 0x54). Read it at
 // runtime to find backWheel_ on the bike. The wheel is a PhysicsObject; its [body] = b2Body*.
@@ -59,7 +63,7 @@ extern "C" {
 #define OFF_WHEEL_BODY_IVAR 0xf4
 // Debug flags file (app-readable, no root). Read once when the hooks install, so toggling a hook
 // = edit the file + force-stop/relaunch (no rebuild/reinstall). Missing file = the defaults below.
-// Format: one "key=0/1" per line. Keys: step, draw, reader, ach, specs.
+// Format: one "key=0/1" per line. Keys: step, draw, reader, ach, specs, bridge, ach_log.
 #define DBGFLAGS_FILE MODS_DIR "/rvdebug.txt"
 // app-private save dir (mod runs as the app UID -> rw, no root): ghosts g_*.dat, data.dat
 #define SAVE_DIR "/data/data/com.miniclip.bikerivals/files/Contents/Resources"
@@ -80,20 +84,24 @@ static Class cls_NSString = 0;
 // OFF: it was a suspect during the run-timer hunt, which was later traced to the step-hook body
 // (not anti-tamper, not the reader). Opt in with reader=1 in <mods>/rvdebug.txt. The rest default
 // ON; the step hook takes an idle fast-path unless gravity/specs are engaged (step_active()).
-static int g_en_step=1, g_en_draw=1, g_en_reader=0, g_en_ach=1, g_en_specs=1;
+// bridge (agent socket + RVEVT events) and ach_log (verbose achievement dump) are dev-only: default OFF.
+static int g_en_step=1, g_en_draw=1, g_en_reader=0, g_en_ach=1, g_en_specs=1, g_en_bridge=0, g_ach_log=0;
 static void reload_flags(){
     FILE* f=fopen(DBGFLAGS_FILE,"r"); if(!f) return;   // no file -> keep defaults (all on)
     char line[64], k[32]; int v;
     while(fgets(line,sizeof(line),f)){
-        if(sscanf(line,"%31[a-z]=%d",k,&v)!=2) continue;
+        if(sscanf(line,"%31[a-z_]=%d",k,&v)!=2) continue;
         if(!strcmp(k,"step"))   g_en_step=v;
         else if(!strcmp(k,"draw"))   g_en_draw=v;
         else if(!strcmp(k,"reader")) g_en_reader=v;
         else if(!strcmp(k,"ach"))    g_en_ach=v;
         else if(!strcmp(k,"specs"))  g_en_specs=v;
+        else if(!strcmp(k,"bridge")) g_en_bridge=v;
+        else if(!strcmp(k,"ach_log")) g_ach_log=v;
     }
     fclose(f);
-    LOGI("rvdebug flags: step=%d draw=%d reader=%d ach=%d specs=%d", g_en_step,g_en_draw,g_en_reader,g_en_ach,g_en_specs);
+    LOGI("rvdebug flags: step=%d draw=%d reader=%d ach=%d specs=%d bridge=%d ach_log=%d",
+         g_en_step,g_en_draw,g_en_reader,g_en_ach,g_en_specs,g_en_bridge,g_ach_log);
 }
 
 // ── minimal ARM32 prologue-relocating inline hook ────────────────────────────
@@ -147,6 +155,10 @@ static void* inline_hook(void* target, void* repl){
 // ── MOD-LOADER ───────────────────────────────────────────────────────────────
 static id (*orig_reader)(id, SEL, id, const char*) = 0;
 static id hook_reader(id self, SEL cmd, id file, const char* pw){
+    if(g_en_bridge && file){                                   // bridge: remember the current level id
+        const char* q = (const char*)msgSend(file, sel_utf8);
+        if(q){ const char* sl = strrchr(q, '/'); rv_note_level_file(sl ? sl+1 : q); }
+    }
     if(!g_en_reader) return orig_reader(self,cmd,file,pw);   // bisect: pass through
     const char* p = file ? (const char*)msgSend(file, sel_utf8) : 0;
     if(p && *p){
@@ -179,6 +191,7 @@ static bool  g_show_ach = false;         // achievements viewer open (Stats butt
 static bool  g_owned = false;            // current touch sequence began on the menu
 
 static inline bool in_menu(float x,float y){
+    if(rv_overlay_hidden()) return false;              // agent hid the overlay: game gets every touch
     if(x>=g_win_x0 && x<=g_win_x1 && y>=g_win_y0 && y<=g_win_y1) return true;
     if(g_show_ach && x>=g_aw_x0 && x<=g_aw_x1 && y>=g_aw_y0 && y<=g_aw_y1) return true;
     return false;
@@ -254,7 +267,7 @@ static float read_body_speed(void* body){
     return s;
 }
 
-// -[World step:(ccTime)] — the per-frame physics tick (class owns world/gravity/setGravity:).
+// -[Physics step:(ccTime)] — the per-frame physics tick (class owns world/gravity/setGravity:/gameTime_).
 // Read the level's base gravity via the game's own getter, write base*mult via setGravity:.
 static void hook_step(id self, SEL cmd, float dt){
     if(!g_en_step){ orig_step(self,cmd,dt); return; }   // bisect: pure pass-through (no gravity/specs/speed)
@@ -286,7 +299,7 @@ static void hook_step(id self, SEL cmd, float dt){
     // and ghost playback. Reading it from the overlay keeps the step idle so both stay correct.)
 }
 
-// -[GameLayer draw] — per-frame; this class owns setCameraZoom:/cameraZoom (the physics
+// -[GameScene draw] — per-frame; this class owns setCameraZoom:/cameraZoom (the physics
 // World does not). The game drives a per-level DYNAMIC zoom (in/out at map sections) by
 // writing cameraZoom each frame, so we MULTIPLY that live value instead of locking it:
 // read the current zoom, tell whether the game changed it (vs our own last write), scale
@@ -436,7 +449,7 @@ static void hook_proccond(id self, SEL cmd, id info, id achs){
             id d=a?((id(*)(id,SEL))msgSend)(a,s_desc):0;
             cstr(d, g_ach_text[i], sizeof g_ach_text[i]);
             if(!g_ach_text[i][0]) snprintf(g_ach_text[i],sizeof g_ach_text[i],"achievement %d",i);
-            if(i<4) LOGI("  ach[%d]=%s", i, g_ach_text[i]);
+            if(g_ach_log && i<4) LOGI("  ach[%d]=%s", i, g_ach_text[i]);
         }
         g_ach_count=n;
         LOGI("ACH list built: %d", n);
@@ -445,6 +458,15 @@ static void hook_proccond(id self, SEL cmd, id info, id achs){
 
 // Stats button -> open our OFFLINE achievements viewer instead of the online stats call
 // (which shows "Unable to view stats" offline). Don't call orig (skips the failing request).
+// MotoXGame level lifecycle — bridge events only (installed when bridge=1). One call per level, not
+// per frame, and they only read state, so the run timer is untouched.
+static void (*orig_lvlloaded)(id,SEL,id)=0;
+static void (*orig_lvlfinished)(id,SEL,id)=0;
+static void (*orig_lsmready)(id,SEL)=0;
+static void hook_lsmready(id self, SEL cmd){ orig_lsmready(self,cmd); rv_on_menu_ready(self); }
+static void hook_lvlloaded(id self, SEL cmd, id info){ orig_lvlloaded(self,cmd,info); rv_on_level_loaded(); }
+static void hook_lvlfinished(id self, SEL cmd, id res){ rv_on_level_finished(res); orig_lvlfinished(self,cmd,res); }
+
 static void hook_clickstats(id self, SEL cmd, id sender){
     (void)self;(void)cmd;(void)sender;
     g_show_ach = true;
@@ -685,6 +707,10 @@ static void poll_death(){
     int st = k|de|ex;
     if(st != g_dstate){
         LOGI("RVDIS: state kill=%d dead=%d exploded=%d", k, de, ex);
+        if(g_en_bridge && g_dstate >= 0){
+            char f[64]; snprintf(f, sizeof f, "\"kill\":%d,\"dead\":%d,\"exploded\":%d", k, de, ex);
+            rv_event(st ? "death" : "alive", f);
+        }
         if(st && g_dstate==0 && g_dismount){                   // alive -> dead: trigger once
             if(g_dismount==2) dismember(); else fling_ragdoll();
         }
@@ -729,11 +755,14 @@ static void hook_swap(id self, SEL cmd){
     last_swap_sc = g_step_calls;
     if(in_level){
         update_speed();                                        // speed HUD (timer-safe overlay path)
-        if(g_dismount) poll_death();                           // dismount: detect crash death -> fling
+        if(g_dismount || g_en_bridge) poll_death();            // dismount fling / bridge death events
     }
-    if(g_menu_open) draw_menu();
-    if(g_show_ach)  draw_achievements();
-    if(g_hud_on)    draw_hud();
+    if(g_en_bridge) rv_bridge_frame(in_level);                // agent bridge: queued cmds + events (GL thread)
+    if(!rv_overlay_hidden()){                                  // agent can hide the overlay for clean shots
+        if(g_menu_open) draw_menu();
+        if(g_show_ach)  draw_achievements();
+        if(g_hud_on)    draw_hud();
+    }
     ImGui::Render();
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
     orig_swap(self, cmd);
@@ -778,6 +807,17 @@ static void install_hooks(){
 
     sel_kill=selReg("kill"); sel_dead=selReg("dead"); sel_exploded=selReg("exploded");
     LOGI("dismount: polling death state (kill/dead/exploded getters)");
+
+    if(g_en_bridge){                                           // agent bridge (dev): socket + events
+        static RvRuntime rt;
+        rt.base=g_base; rt.msgSend=msgSend; rt.selReg=selReg; rt.getClass=getClass;
+        rt.step_calls=&g_step_calls; rt.physics=&g_game_self; rt.bike=&g_bike_self;
+        rv_bridge_init(&rt, true);
+        orig_lvlloaded  =(void(*)(id,SEL,id))inline_hook((void*)(g_base+OFF_LVLLOADED),  (void*)hook_lvlloaded);
+        orig_lvlfinished=(void(*)(id,SEL,id))inline_hook((void*)(g_base+OFF_LVLFINISHED),(void*)hook_lvlfinished);
+        orig_lsmready   =(void(*)(id,SEL))   inline_hook((void*)(g_base+OFF_LSM_READY),   (void*)hook_lsmready);
+        LOGI("bridge on (levelLoaded=%p levelFinished=%p menuReady=%p)", (void*)orig_lvlloaded, (void*)orig_lvlfinished, (void*)orig_lsmready);
+    }
 }
 
 static int find_cb(struct dl_phdr_info* info, size_t sz, void* d){

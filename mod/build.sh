@@ -15,7 +15,7 @@ CXX="$(ls "$NDK"/toolchains/llvm/prebuilt/*/bin/armv7a-linux-androideabi21-clang
 [ -n "$CXX" ] || { echo "ERROR: armv7a clang++ not found under $NDK"; exit 1; }
 
 IMGUI=mod/imgui
-SRC="mod/mod.cpp $IMGUI/imgui.cpp $IMGUI/imgui_draw.cpp $IMGUI/imgui_tables.cpp $IMGUI/imgui_widgets.cpp $IMGUI/backends/imgui_impl_opengl3.cpp"
+SRC="mod/mod.cpp mod/bridge.cpp $IMGUI/imgui.cpp $IMGUI/imgui_draw.cpp $IMGUI/imgui_tables.cpp $IMGUI/imgui_widgets.cpp $IMGUI/backends/imgui_impl_opengl3.cpp"
 OUT="build/work/lib/armeabi-v7a/libmod.so"
 mkdir -p "$(dirname "$OUT")"
 echo "==> CXX: $CXX"
