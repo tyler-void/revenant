@@ -24,6 +24,7 @@ extern "C" {
 #include <stdio.h>
 #include <stdlib.h>
 #include <stddef.h>
+#include <math.h>
 }
 #include <string>
 #include <vector>
@@ -63,6 +64,9 @@ struct JV {
     double num(const char* k, double d) const { auto v = get(k); return v && v->t == NUM ? v->n : d; }
     std::string str(const char* k, const char* d = "") const { auto v = get(k); return v && v->t == STR ? v->s : d; }
     bool has(const char* k) const { return get(k) != nullptr; }
+    bool flag(const char* k, bool d) const {
+        auto v = get(k); return !v ? d : v->t == BOOL ? v->b : v->t == NUM ? v->n != 0 : d;
+    }
 };
 static void jws(const char*& p, const char* e){ while(p < e && (*p==' '||*p=='\t'||*p=='\r'||*p=='\n')) p++; }
 static bool jparse(const char*& p, const char* e, JV& v, int depth = 0){
@@ -358,7 +362,7 @@ static int count_bodies(id phys){
 // On failure: back out (-[PauseMenu btnExit], the pause menu's Exit button) and retry (max_attempts),
 // then goto_failed. (-[MotoXGame exitToMenu] was tried first: it does nothing from a crashed run.)
 // Career-map dots per world (VERIFIED live: 105 LevelDots, pack_ 0..3 = 30/30/30/15, numbered globally).
-// World 2/3 ship more level FILES (2_31..2_40, 3_31..3_45) than the map shows; those aren't reachable here.
+// The other 25 level files are universe sub-levels (2_1_1..2_1_10, 3_1_1..3_1_15); not reachable here.
 static const int WORLD_SIZES[] = {30, 30, 30, 15};
 enum GPhase { G_NAV, G_DETAIL, G_LOADING, G_VERIFY };
 struct GotoJob {
@@ -687,16 +691,55 @@ static std::string cmd_input(const JV& a){
 // b2Body (layout from PhysicsObject.body_'s type string; consistent with the device-proven +0x44 velocity
 // and +0x70 joint list): m_xf.p +12/+16, m_sweep.c +52/+56, m_sweep.a +64, m_linearVelocity +68/+72,
 // m_angularVelocity +76. Units are Box2D world units (meters), not cocos points.
+// m_contactList @0x74 -> b2ContactEdge {other@0, contact@4, prev@8, next@12}; b2Contact {vtable@0,
+// m_flags@4}. Box2D 2.1/2.2: e_touchingFlag = 0x2 (verify with `bike` -> contacts: raw flag words).
+static const uint32_t B2_TOUCHING = 0x2;
+static int touching(char* b){
+    int n = 0, guard = 0;
+    for(char* e = b ? *(char**)(b + 0x74) : 0; e && guard < 64; e = *(char**)(e + 12), guard++){
+        char* c = *(char**)(e + 4);
+        if(c && (*(uint32_t*)(c + 4) & B2_TOUCHING)) n++;
+    }
+    return n;
+}
+static std::string contact_flags(char* b){
+    std::string r = "[";
+    int guard = 0;
+    for(char* e = b ? *(char**)(b + 0x74) : 0; e && guard < 16; e = *(char**)(e + 12), guard++){
+        char* c = *(char**)(e + 4);
+        char h[16]; snprintf(h, sizeof h, "%s%u", guard ? "," : "", c ? *(uint32_t*)(c + 4) : 0u);
+        r += h;
+    }
+    return r + "]";
+}
 static std::string body_json(char* b){
     if(!b) return "null";
     float* f = (float*)b;
     char o[320];
     float vx = f[17], vy = f[18];
-    snprintf(o, sizeof o, "{\"ptr\":%s,\"pos\":[%.4f,%.4f],\"center\":[%.4f,%.4f],\"angle\":%.5f,\"vel\":[%.4f,%.4f],\"speed\":%.4f,\"ang_vel\":%.4f}",
-             jp(b).c_str(), f[3], f[4], f[13], f[14], f[16], vx, vy, __builtin_sqrtf(vx*vx + vy*vy), f[19]);
-    return o;
+    snprintf(o, sizeof o, "{\"ptr\":%s,\"pos\":[%.4f,%.4f],\"center\":[%.4f,%.4f],\"angle\":%.5f,\"vel\":[%.4f,%.4f],\"speed\":%.4f,\"ang_vel\":%.4f,\"touching\":%d,\"contacts\":",
+             jp(b).c_str(), f[3], f[4], f[13], f[14], f[16], vx, vy, __builtin_sqrtf(vx*vx + vy*vy), f[19], touching(b));
+    return o + contact_flags(b) + "}";
 }
 static char* phys_body(id physobj){ char* w; const char* t; return physobj && ivar_loc(physobj, "body_", &w, &t) ? *(char**)w : 0; }
+// Ivar addresses of the current bike, resolved once per bike (find_ivar walks the class chain).
+struct BikeIvars { id bike = 0; char *bg = 0, *fg = 0, *bgp = 0, *fgp = 0, *head = 0, *dead = 0, *air = 0, *gt = 0; };
+static BikeIvars g_bi;
+static const BikeIvars& bike_ivars(id bike){
+    if(g_bi.bike != bike){
+        g_bi = BikeIvars(); g_bi.bike = bike;
+        const char* t;
+        ivar_loc(bike, "backGround_", &g_bi.bg, &t);          ivar_loc(bike, "frontGround_", &g_bi.fg, &t);
+        ivar_loc(bike, "backGroundPrecise_", &g_bi.bgp, &t);  ivar_loc(bike, "frontGroundPrecise_", &g_bi.fgp, &t);
+        ivar_loc(bike, "headHit_", &g_bi.head, &t);           ivar_loc(bike, "dead_", &g_bi.dead, &t);
+        ivar_loc(bike, "airTime_", &g_bi.air, &t);            ivar_loc(bike, "groundTangent_", &g_bi.gt, &t);
+    }
+    return g_bi;
+}
+static int ground_bits(const BikeIvars& v){
+    auto on = [](char* p){ return p && *p; };
+    return (on(v.bg) ? 1 : 0) | (on(v.fg) ? 2 : 0) | (on(v.bgp) ? 4 : 0) | (on(v.fgp) ? 8 : 0) | (on(v.head) ? 16 : 0);
+}
 static std::string cmd_bike(){
     id bike = cur_bike();
     if(!bike) return "{\"bike\":null,\"why\":\"no level loaded (or the bike was not captured)\"}";
@@ -708,6 +751,9 @@ static std::string cmd_bike(){
         if(ivar_loc(bike, wn, &w, &t)) r += ",\"" + std::string(wn, strlen(wn) - 1) + "\":" + body_json(phys_body(*(id*)w));
     }
     r += ",\"kill\":" + ivar_json(bike, "kill_") + ",\"dead\":" + ivar_json(bike, "dead_");
+    const BikeIvars& bv = bike_ivars(bike);
+    r += ",\"ground\":" + ji(ground_bits(bv)) + ",\"air_time\":" + (bv.air ? jf(*(float*)bv.air) : std::string("null")) +
+         ",\"ground_tangent\":" + (bv.gt ? "[" + jf(((float*)bv.gt)[0]) + "," + jf(((float*)bv.gt)[1]) + "]" : std::string("null"));
     r += ",\"input\":{\"throttle\":" + jf(g_input.thr) + ",\"brake\":" + jf(g_input.brk) + ",\"lean\":" + jf(g_input.lean) + "}";
     float rt; if(run_time(&rt)) r += ",\"run_time\":" + jf(rt);
     return r + ",\"mono\":" + jf(now_mono()) + "}";
@@ -756,6 +802,132 @@ static std::string cmd_scene_dump(const JV& a){
     return r + "],\"scanned\":" + ji((long long)all.size()) + "}";
 }
 
+// ── trace: per-frame bike samples recorded IN-GAME on the GL thread ──────────────────────────
+// trace_start{fields, every_n, max, while_running} / trace_stop{keep, stride}. Samples are taken in
+// rv_bridge_frame (the swap hook — reads only, so the run timer stays correct) and returned as
+// columnar arrays: {"fields":[...], "n":N, "data":{"t":[...], "x":[...], ...}}.
+// Fields: frame, t (run_time = Manager.time_), x y vx vy a w (chassis pos/vel/angle/ang_vel),
+// bx by fx fy (back/front wheel pos), c (the GAME's ground flags: 1 Bike.backGround_, 2 frontGround_,
+// 4 BikeCommon1.backGroundPrecise_, 8 frontGroundPrecise_, 16 Bike.headHit_), air (BikeCommon1.airTime_),
+// gt (angle of BikeCommon1.groundTangent_, radians), ct (raw Box2D touching bits — 1 back wheel, 2 front,
+// 4 chassis — DIAGNOSTIC: sensor/trigger contacts also count), dead, thr brk lean (bridge input). while_running (default true) samples only frames where run_time
+// advanced (= physics stepped and the race clock runs), so pre-start / paused frames are skipped.
+static const char* TRACE_FIELDS[] = {"frame", "t", "x", "y", "vx", "vy", "a", "w", "bx", "by", "fx", "fy",
+                                     "c", "dead", "thr", "brk", "lean", "air", "gt", "ct"};
+static const int N_TRACE_FIELDS = sizeof TRACE_FIELDS / sizeof *TRACE_FIELDS;
+struct TraceState {
+    bool active = false, while_running = true;
+    int every_n = 1, tick = 0, bike_gen = -1;
+    size_t max = 36000;
+    float last_t = -1;
+    std::vector<int> fields;
+    std::vector<std::vector<float>> cols;
+    std::string stopped;                     // why recording stopped on its own ("" = still running / by trace_stop)
+};
+static TraceState g_trace;
+
+static char* wheel_body(id bike, const char* ivar){
+    char* w; const char* t;
+    return ivar_loc(bike, ivar, &w, &t) ? phys_body(*(id*)w) : 0;
+}
+static void trace_tick(){
+    TraceState& T = g_trace;
+    if(!T.active) return;
+    id bike = cur_bike();
+    if(!bike) return;
+    int gen = R.bike_gen ? *R.bike_gen : 0;
+    if(T.bike_gen < 0) T.bike_gen = gen;
+    else if(gen != T.bike_gen){ T.active = false; T.stopped = "bike_changed"; return; }   // restart / new level
+    float rt = -1; run_time(&rt);
+    if(T.while_running && !(rt > T.last_t)) return;
+    T.last_t = rt;
+    if(T.tick++ % T.every_n) return;
+    if(T.cols.empty() || T.cols[0].size() >= T.max){ T.active = false; T.stopped = "max"; return; }
+    char* torso = phys_body(responds(bike, "heroTorso") ? m0(bike, "heroTorso") : 0);
+    char* bw = 0; char* fw = 0;
+    bool need_wheels = false;
+    for(int f : T.fields) if((f >= 8 && f <= 11) || f == 19) need_wheels = true;
+    const BikeIvars& bv = bike_ivars(bike);
+    if(need_wheels){ bw = wheel_body(bike, "backWheel_"); fw = wheel_body(bike, "frontWheel_"); }
+    float* tf = (float*)torso;
+    for(size_t k = 0; k < T.fields.size(); k++){
+        float v = NAN;
+        switch(T.fields[k]){
+            case 0: v = (float)g_frame.load(); break;
+            case 1: v = rt; break;
+            case 2: if(tf) v = tf[3]; break;
+            case 3: if(tf) v = tf[4]; break;
+            case 4: if(tf) v = tf[17]; break;
+            case 5: if(tf) v = tf[18]; break;
+            case 6: if(tf) v = tf[16]; break;
+            case 7: if(tf) v = tf[19]; break;
+            case 8: if(bw) v = ((float*)bw)[3]; break;
+            case 9: if(bw) v = ((float*)bw)[4]; break;
+            case 10: if(fw) v = ((float*)fw)[3]; break;
+            case 11: if(fw) v = ((float*)fw)[4]; break;
+            case 12: v = (float)ground_bits(bv); break;
+            case 13: v = bv.dead ? (float)(*bv.dead ? 1 : 0) : NAN; break;
+            case 14: v = g_input.thr; break;
+            case 15: v = g_input.brk; break;
+            case 16: v = g_input.lean; break;
+            case 17: if(bv.air) v = *(float*)bv.air; break;
+            case 18: if(bv.gt) v = atan2f(((float*)bv.gt)[1], ((float*)bv.gt)[0]); break;
+            case 19: v = (float)((touching(bw) ? 1 : 0) | (touching(fw) ? 2 : 0) | (touching(torso) ? 4 : 0)); break;
+        }
+        T.cols[k].push_back(v);
+    }
+}
+static std::string cmd_trace_start(const JV& a, std::string& err){
+    TraceState T;
+    std::vector<std::string> names;
+    if(const JV* f = a.get("fields")){
+        if(f->t == JV::ARR) for(const JV& x : f->a) names.push_back(x.s);
+        else if(f->t == JV::STR){ std::string cur; for(char ch : f->s + ","){ if(ch == ','){ if(!cur.empty()) names.push_back(cur); cur.clear(); } else if(ch != ' ') cur += ch; } }
+    }
+    if(names.empty()) names = {"t", "x", "y", "vx", "vy", "a", "w", "c"};
+    for(auto& n : names){
+        int idx = -1;
+        for(int i = 0; i < N_TRACE_FIELDS; i++) if(n == TRACE_FIELDS[i]) idx = i;
+        if(idx < 0){ err = "unknown trace field: " + n; return ""; }
+        T.fields.push_back(idx);
+    }
+    T.every_n = std::max(1, (int)a.num("every_n", 1));
+    T.max = (size_t)std::max(1.0, std::min(200000.0, a.num("max", 36000)));
+    T.while_running = a.flag("while_running", true);
+    T.cols.assign(T.fields.size(), {});
+    for(auto& c : T.cols) c.reserve(std::min<size_t>(T.max, 4096));
+    T.active = true;
+    g_trace = std::move(T);
+    std::string r = "{\"tracing\":true,\"fields\":[";
+    for(size_t k = 0; k < g_trace.fields.size(); k++) r += (k ? "," : "") + js(TRACE_FIELDS[g_trace.fields[k]]);
+    return r + "],\"every_n\":" + ji(g_trace.every_n) + ",\"max\":" + ji((long long)g_trace.max) + "}";
+}
+static std::string cmd_trace_stop(const JV& a){
+    TraceState& T = g_trace;
+    bool keep = a.flag("keep", false);                // keep = peek: return the data, keep recording
+    int stride = std::max(1, (int)a.num("stride", 1));
+    size_t n = T.cols.empty() ? 0 : T.cols[0].size();
+    std::string r = "{\"active\":" + std::string(T.active && keep ? "true" : "false") + ",\"n\":" + ji((long long)n) +
+                    ",\"every_n\":" + ji(T.every_n) + ",\"stride\":" + ji(stride) + ",\"stopped\":" + js(T.stopped.c_str()) +
+                    ",\"fields\":[";
+    for(size_t k = 0; k < T.fields.size(); k++) r += (k ? "," : "") + js(TRACE_FIELDS[T.fields[k]]);
+    r += "],\"data\":{";
+    for(size_t k = 0; k < T.fields.size(); k++){
+        r += (k ? ",\"" : "\"") + std::string(TRACE_FIELDS[T.fields[k]]) + "\":[";
+        char b[24];
+        for(size_t i = 0; i < n; i += stride){
+            float v = T.cols[k][i];
+            if(v != v) snprintf(b, sizeof b, "%snull", i ? "," : "");
+            else snprintf(b, sizeof b, "%s%.6g", i ? "," : "", v);
+            r += b;
+        }
+        r += "]";
+    }
+    r += "}}";
+    if(!keep){ T.active = false; T.cols.clear(); T.fields.clear(); }
+    return r;
+}
+
 // ── GL-thread queue ──────────────────────────────────────────────────────────────────────────
 struct Job {
     std::string cmd; JV args; std::string result, error; bool done = false;
@@ -775,6 +947,8 @@ static void run_on_gl(Job& j){
     else if(j.cmd == "input")    j.result = cmd_input(j.args);
     else if(j.cmd == "bike")     j.result = cmd_bike();
     else if(j.cmd == "scene_dump") j.result = cmd_scene_dump(j.args);
+    else if(j.cmd == "trace_start") j.result = cmd_trace_start(j.args, j.error);
+    else if(j.cmd == "trace_stop")  j.result = cmd_trace_stop(j.args);
     else j.error = "unknown command: " + j.cmd;
 }
 
@@ -792,6 +966,7 @@ void rv_bridge_frame(bool in_level){
     goto_tick(in_level);
     input_tick();
     track_race(in_level);
+    trace_tick();
 }
 
 // ── socket side ──────────────────────────────────────────────────────────────────────────────
@@ -849,7 +1024,13 @@ static void* client_thread(void* arg){
             std::string line = buf.substr(0, nl); buf.erase(0, nl + 1);
             if(line.empty()) continue;
             std::string reply = handle_line(line) + "\n";
-            if(write(fd, reply.data(), reply.size()) < 0) break;
+            size_t off = 0;                                 // replies can be large (trace_stop): write all
+            while(off < reply.size()){
+                ssize_t w = write(fd, reply.data() + off, reply.size() - off);
+                if(w <= 0) break;
+                off += (size_t)w;
+            }
+            if(off < reply.size()) break;
         }
         if(buf.size() > (1 << 20)) break;     // runaway line: drop the client
     }

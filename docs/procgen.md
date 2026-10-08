@@ -18,10 +18,12 @@
 - Put the enhanced generator on an **additive World 5** (never touch Halloween /
   Christmas — separate worlds).
 
-## 1. Corpus analysis — 130 decoded levels (worlds 1–4)
+## 1. Corpus analysis — 130 decoded level files (worlds 1–4)
 
-Decoded all 130 story levels (universal level key) → JSON, analyzed
-construction. Headline numbers:
+Decoded all 130 level files (universal level key) → JSON, analyzed construction. **130 files = 105
+story levels (career map 30/30/30/15) + 25 universe sub-levels `2_1_1…2_1_10`, `3_1_1…3_1_15`**
+(VERIFIED 2026-10-08 by file listing + the live LevelDot count). The older numbers below mix both
+sets; the G1 stats further down use the 105 story levels only. Headline numbers:
 
 ### Terrain construction (why generated terrain looked "lazy")
 - **Terrain = many small polygons.** median **39 polys/level** (range 10–167),
@@ -44,7 +46,7 @@ construction. Headline numbers:
   `t2_concrete`, W3 `T3_Rock_Texture`, W4 `t4_maintexture`, shared `S1_Terrain`/
   `S2_Ground_Texture`.
 
-### Obstacle taxonomy (what makes levels challenging) — entities across 130 levels
+### Obstacle taxonomy (what makes levels challenging) — entities across 130 level files
 The challenge is overwhelmingly **physics-joint contraptions**, not static terrain:
 
 | Entity | Total | per-level by world (avg) | what it is |
@@ -72,6 +74,45 @@ tricks. **W4** = fewer props, tighter/faster (precision).
 - Gold (fastest medal) time by world: **W1 26s → W2 23.5s → W3 25s → W4 20s**.
   Shorter = tighter execution. W4 is the speed/precision wall.
 - Obstacle *density* peaks at W2; W4 trades density for tight timing.
+
+### G1 corpus stats (2026-10-08) — `tools/levelgen/corpus_stats.py`, 105 story levels
+Reproduce: `python3 tools/levelgen/decode_corpus.py` (local corpus in `~/.cache/revenant/corpus/`, never
+committed) → `python3 tools/levelgen/corpus_stats.py` (prints + writes `corpus_stats.json` there).
+Aggregates only. VERIFIED = measured from the data; the *reading* of a number is INFERRED.
+
+- **Units: level coordinates = Box2D world units (VERIFIED).** 1_24's start entity x = −85.2; the live
+  chassis body at rest (bridge `bike`) x = −86.3. The y offset (+8.8) is the rider body above the start
+  point. So a generated gap of 40 units is a 40-unit Box2D gap.
+- **Medals** (stored `[1★, 2★, 3★]` descending — all 105 levels): 2★/3★ median **1.12** (p10 1.05,
+  p90 1.26); 1★/3★ median **1.33** (p10 1.17, p90 1.56). Gold (3★) median 24 s (W1 26, W2 23, W3 25,
+  W4 20). ⇒ generator medal times = `bot_time × {1.33, 1.12, 1.0}` scaled per difficulty.
+- **Length & pace:** start→finish median 1655 units (p10 996, p90 2250); gold pace median
+  **70 units/s** (W3 54, W4 83).
+- **Ridden-surface slopes** (upper envelope of static ground, start→finish, arc-length weighted,
+  steps ≥3 units/sample excluded): uphill median 8°, p90 44°, p99 67°; downhill median 7°, p90 51°,
+  p99 71°. Share steeper than 10°/20°/30°/45°: 42% / 27% / 18% / 10%. W4 is the flattest (32% >10°).
+- **Steps** (envelope jumps ≥3 units between 1-unit samples = walls/cliffs): step-ups median 5.9
+  units (p90 177 — tall walls are scenery/ceilings, INFERRED); step-downs median 7.7 (p90 144).
+- **Pits** (lip → surface stays ≥2·3 units below → returns to within 6 units of the lip height, ≤200
+  units): 2.5/level. Open pits (not bridged by a dynamic body, no water): width median **65** (p10 5,
+  p90 180), depth median 132, landing at about lip height (drop median −11, i.e. landings slightly
+  HIGHER). 62 pits are bridged by dynamic bodies (bridges/planks), 79 hold water. W4 has the most
+  (6.5/level, mostly narrow: median width 15).
+- **Set pieces per level** (all worlds): water 2.4, barrels 1.3 (clusters of median 1, p90 3, max 12),
+  spikes 0.93, nitro 0.49, TriggerNewGravity 0.42 (W3 only), geyser 0.31 (W2 only), drone 0.30 (W4
+  only), checkpoint 0.36.
+- **Two encodings of a set piece (VERIFIED in the data):** a **bare prefab reference** (`prefabName` +
+  `position`, NO children — e.g. `Nitro`, `Spikes`/`Spikes_T2..T4`, `ExplosiveBarrel`, `Checkpoint*`,
+  `win`/`win_t2..t4`, `geyser_T2`, `Tree1..4`, `struct1`) or an **inline expansion** (`refobjectList`
+  children, no `prefabName`, e.g. `ExplosiveBarrel[EditorPhysicsObject{EditorSprite},EditorSprite]`,
+  `TriggerWin[EditorSprite,EditorSprite,EditorTrigger]`). Bare references need no ref remapping, so
+  they are the cheapest generator set pieces (INFERRED that the loader expands them; verify on device).
+- **Joint contraptions** (connected components of bodies through joints): 4.8/level. Most common:
+  one dynamic body on a revolute joint to the world (76), one dynamic body welded to the world (62), the
+  W4 Drone (Prismatic×5 + Revolute, 7 bodies, 31), body+body prismatic (29). **See-saw candidates**
+  (ONE revolute, ONE dynamic plank with aspect ≥4, pinned to the world): only 6 in 105 levels (length
+  median 82, thickness 14). The other single-revolute bodies are wheels/arms (INFERRED).
+- Trigger links (`objects` lists): 6.4/level, mostly WaterTrigger/EditorTrigger → bodies.
 
 ## 2. Web / roguelike research (synthesized, with sources)
 

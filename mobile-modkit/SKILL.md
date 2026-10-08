@@ -87,6 +87,8 @@ arrives before your wait starts. `regex` matches `"L TAG: message"`.
 | `input` | `throttle 0..1, brake 0..1, lean -1..1, hold_ms, release` | held game input through the game's own gamepad handlers (HUD rising edge starts the race; the bike gets the held value; lean via MotionManager). Several at once is fine. `hold_ms` auto-releases (`input_released` event) |
 | `bike` | | chassis + wheels: `pos`, `center`, `angle` (rad, + = CCW / nose up), `vel`, `speed`, `ang_vel` (Box2D world units), `dead`, current input, `run_time`, `mono` |
 | `scene_dump` | `depth, limit, class (prefix), visible_only, ptr` | CCNode tree with `z`, `tag`, `visible`, `pos`, `size` and `world_bbox` in cocos points (design resolution 550×320) |
+| `trace_start` | `fields[], every_n, max, while_running` | records per-frame bike samples IN-GAME on the GL thread (swap hook, read-only — timer-safe). Fields: `frame t x y vx vy a w bx by fx fy c air gt ct dead thr brk lean` (default `t x y vx vy a w c`). `c` = the game's ground flags (1 back wheel, 2 front, 4/8 precise, 16 head hit); `gt` = ground tangent angle; `air` = airTime_. `while_running` (default true) keeps only frames where run_time advanced → exactly one sample per physics step. Stops itself on a new bike (`stopped: bike_changed`) or at `max` |
+| `trace_stop` | `keep, stride` | returns `{n, fields, data:{field:[…]}}` (columnar, `%.6g`); `keep:true` = peek without stopping. Large: drive it from a script, not interactively |
 
 Events (ring of 512 + logcat line `RVEVT {"seq":N,"type":"…","mono":T,…}` under tag `RVMOD`):
 `scene_ready{class}`, `goto_progress{step}`, `goto_done{lid,bodies,bodies_added,bike,attempt}`,
@@ -96,7 +98,8 @@ Events (ring of 512 + logcat line `RVEVT {"seq":N,"type":"…","mono":T,…}` un
 Driving (Bike Rivals, VERIFIED): `input {throttle:1}` starts the race and accelerates; `input {lean:-1}` =
 lean back (nose up / wheelie), `+1` = forward; `input {brake:1}` slows; `input {release:true}` lets go.
 Script it (`tools/device/acceptance_bridge_v1.py`) — the agent's own latency between interactive calls
-is seconds, so time-sensitive sequences belong in one script or in `hold_ms`.
+is seconds, so time-sensitive sequences belong in one script or in `hold_ms`. To SEE what happened, wrap
+the run in `trace_start`/`trace_stop` (reference: `tools/device/acceptance_trace.py`).
 
 Timer checks: use two `state` calls and compare Δ`run_time` / Δ`mono` (both sampled on the GL thread in
 the same frame — no adb noise). The game adds exactly 1/60 s per physics step and steps once per rendered

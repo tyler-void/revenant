@@ -407,7 +407,8 @@ async def bridge_call(cmd: str, args: dict | None = None, timeout_s: float = 5) 
     """Call the in-game bridge (JSON lines over adb forward tcp:BRIDGE_PORT localabstract:BRIDGE_SOCKET).
     Returns the bridge reply {ok, result|error}. For Revenant: ping, state, events_since{seq},
     overlay{mode}, goto_level{w,l}, find{class,ivars}, children{ptr}, ivar{ptr,name|names}, call{target,sel,args,ret},
-    log{msg}, input{throttle,brake,lean,hold_ms,release}, bike, scene_dump{depth,limit,class,visible_only}."""
+    log{msg}, input{throttle,brake,lean,hold_ms,release}, bike, scene_dump{depth,limit,class,visible_only},
+    trace_start{fields,every_n,max,while_running}, trace_stop{keep,stride} (columnar per-frame bike samples)."""
     try:
         rep = await _bg(bridge.call, cmd, args or {}, min(max(timeout_s, 0.5), 30))
     except BridgeError as e:

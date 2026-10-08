@@ -92,7 +92,7 @@ checking every target's type; -1 = none):
 - 7/93 (1_1) and 7/76 (1_25) non-spline physics polygons are concave or have > 8 vertices,
   yet load — so the game's Box2D mapping isn't plain `b2PolygonShape` (open: Phase-3 RE).
 
-## Level corpus analysis (all 130 decoded levels)
+## Level corpus analysis (all 130 decoded level files: 105 story + 25 universe sub-levels)
 
 Decoded every level with the universal key (`LevelCodec` batch mode) and measured:
 - **Terrain = MANY small polygons**: median **46** EditorPhysicsObjects/level
@@ -198,6 +198,27 @@ over-spine** model — "playable by construction," not by luck:
   `setTriangleList:` — polygons are likely triangulated before becoming fixtures, which would explain
   why concave / >8-vertex polygons load fine.
 
+## Bike state & traces (G1b, 2026-10-08)
+
+- **The game tracks ground contact itself (VERIFIED):** `Bike.backGround_` / `frontGround_` (BOOL),
+  `BikeCommon1.backGroundPrecise_` / `frontGroundPrecise_`, `groundTangent_` (b2Vec2), `contactNormal_`,
+  `airTime_` (float), `Bike.headHit_`, `dead_`. Check on 1_24 (bridge trace vs the decoded level's terrain
+  envelope): back wheel flagged grounded → height above the terrain median **2.64** (≈ wheel radius 2.2);
+  not grounded → median **69**. `atan2(groundTangent_)` equals the terrain edge angle under the wheels
+  (median error 0.000 rad over 46 grounded samples) → a bot can read its lean target in-game.
+- **Raw Box2D contacts are a worse signal (VERIFIED):** layout is Box2D **2.1.x** (`b2Mat22` transform:
+  sweep.c @52 — 2.2 would be @36), b2Contact `m_flags`@4, touching = 0x2. Contacts exist before the race
+  starts with flags 0x4 only (physics hasn't stepped; never evaluated), and mid-air samples can read
+  "touching" (sensor/trigger fixtures count too — INFERRED). Kept only as the `ct` diagnostic field.
+- **Per-frame sampling is exact (VERIFIED):** with `while_running` the trace has one sample per physics
+  step: 268 samples over run_time 0→4.450 s, every Δt = 1/60.
+- **Same input → same trajectory (OBSERVED, 2 runs):** two full-throttle 4 s runs on 1_24 gave identical
+  end x (249.81) and max speed (128.26). If this holds generally, a bot run is a reproducible verifier.
+- **Effective gravity in flight ≈ −68 units/s²** (chassis dvy/dt over 131 airborne samples, p10 −81, p90
+  −51; rider joints add noise — INFERRED). The world's own value is behind `[Physics gravity]` (a b2Vec2
+  struct return; the bridge `call` doesn't support stret yet).
+- Full-throttle on 1_24: top chassis speed 128 units/s in 4.45 s; the corpus gold pace median is 70 units/s.
+
 ## Open questions (TODO research)
 
 - **Is the game frame-capped? (owner, 2026-10-08 — noted, not fixed.)** VERIFIED on Waydroid: the HUD run
@@ -206,11 +227,13 @@ over-spine** model — "playable by construction," not by luck:
   timer AND the physics 1.5–2× fast. Check: the cocos2d animation interval / swap interval the game sets,
   and measure `run_time`/`mono` + `frame`/`mono` with the bridge on a high-refresh phone.
 - **Career map vs level files (VERIFIED 2026-10-08):** the map has 105 dots (worlds 30/30/30/15, global
-  number = (w−1)·30 + l), but worlds 2/3 ship more files (2_31…2_40, 3_31…3_45). What loads those?
+  number = (w−1)·30 + l) and there are exactly 105 story files `<w>_<l>.dat`. The other 25 files are
+  universe sub-levels `2_1_1…2_1_10` and `3_1_1…3_1_15` (3-part names). Open: what loads those (the
+  "universe" mode of levels 2_1 / 3_1?).
 
 - **World structure (confirmed):** the MAIN world map = `WorldDefinition.plist`
   (plaintext: 12 `visuals` panels `WorldPanel1-12` + 3 `locks`). **Only worlds 1–4
-  have level files** (`<w>_<l>.dat`: 30/40/45/15 = 130); **World 5 = the empty "?"
+  have level files** (`<w>_<l>.dat`: 30/30/30/15 = 105, plus 25 universe sub-levels `2_1_*`/`3_1_*` = 130 files); **World 5 = the empty "?"
   slot** (`WorldPanel5`/`LevelSelectBK5` exist, no `5_*.dat`). **Halloween &
   Christmas are SEPARATE worlds** — their own `HalloweenWorldDefinition.plist` /
   `ChristmasWorldDefinition.plist` (1 panel each), `h_*`/`c_*` level naming,

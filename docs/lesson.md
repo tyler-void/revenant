@@ -21,10 +21,10 @@
   controls tutorial (`loadTutorial`), whose overlay logic depends on the bike
   becoming "ready"; a broken level hangs the tutorial and masks the real cause.
   Use a post-tutorial slot to isolate level bugs.
-- **The ground is MANY small CCW polygons, not one big shape** (CONFIRMED across
-  130 levels: median 46 polygons/level, median 4 vtx, 72% ≤8 vtx). A single giant
-  generated polygon builds an invalid Box2D body → bike falls through. *Fix:*
-  generate the terrain as a strip of small CCW quad slabs (one per surface segment).
+- **The ground is MANY small polygons, not one big shape** (median 46 polygons/level, median
+  4 vtx, 72% ≤8 vtx). ⚠ 2026-10-08: "must be CCW" and "≤8 vertices" are NOT rules — 1_25 alone has
+  53 CW physics polygons, and long polygons exist. The old fall-through came from one specific
+  generated polygon; which encoding the loader accepts is tested in the G2 experiment (procgen.md).
 - **Type fidelity** in plists: int vs real usually doesn't matter (the game reads
   NSNumber), but be deliberate. JSON preserves int/float via the `.0`.
 - **To make generated levels feel hand-built, CLONE real prefabs — don't invent

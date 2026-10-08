@@ -52,6 +52,14 @@ Tests: `~/.nvm/versions/node/*/bin/node --test tools/level-editor/tests/` (ref o
 `python3 -m unittest discover -s tools/level-editor/tests -p 'test_*.py'` (types) ·
 `python3 tools/level-editor/tests/roundtrip_types.py --doc 1_25` (real level, local only).
 
+## 2b. Corpus statistics + in-game traces (generator data, G1)
+```bash
+python3 tools/levelgen/decode_corpus.py          # all 130 level files -> ~/.cache/revenant/corpus/ (LOCAL, never commit)
+python3 tools/levelgen/corpus_stats.py           # aggregates only -> stdout + ~/.cache/revenant/corpus/corpus_stats.json
+uv run --project mobile-modkit/mcp python tools/device/acceptance_trace.py --level 1_24 --secs 4
+#   bridge trace_start/trace_stop: one sample per physics step; raw trace -> ~/.cache/revenant/acceptance/
+```
+
 ## 3. Generate a procedural level
 ```bash
 python3 tools/level-editor/levelgen.py <seed> tools/level-editor/levels/5_1.level.json [length] [difficulty]

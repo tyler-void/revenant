@@ -40,6 +40,10 @@ dead ~2020); our patched build is all-unlocked + fuel-fixed + TILT-FIXED-for-mod
 Android + offline — a great "just play" experience. Legal model stays BYO-original
 (ship methods only; distributing the patched APK is the 🔴 line).
 
+**PRIORITY NOW (owner 2026-10-08): the GENERATOR TRACK G1–G4** (corpus stats + bridge traces → terrain
+encoding experiment → in-game bot verifier → `tools/levelgen/` generator v2); the level editor stays as is.
+Commit locally per step, report after each, don't push. Record: [docs/procgen.md](docs/procgen.md).
+
 **ACTIVE — full speed (in order): Phase 7 then Phase 8.** (Owner 2026-06-14: move on to 7+8;
 the rest are WIP.)
 - **Phase 7 — offline achievements** (IDs/conditions already extracted from ConditionInfo).
