@@ -175,6 +175,29 @@ over-spine** model — "playable by construction," not by luck:
   Tiny Wings / Hill Climb sine terrain; fairness = transparency + telegraphing +
   no surprise deaths (SuperJump).
 
+## Live runtime facts via the agent bridge (2026-10-08, VERIFIED on Waydroid)
+
+- **Physics stepping:** `Physics.timeStep_` = 1/60, `velocityIterations_` = **20**, `positionIterations_` = **10**;
+  one step per rendered frame. The HUD run timer is `Manager.time_` (+1/60 per step); `Physics.gameTime_`
+  stays 0 in single-player.
+- **Input entry points (gamepad path):** a controller event reaches several handlers.
+  `-[HudLayer onMotionEvent:axisId:value:]` reacts to axes 17/18/19/23 with value > 0.5 by calling ONE
+  HUD method (the "tap" that starts physics / retries when dead) and does NOT pass the value on;
+  `-[BikeCommon1 onMotionEvent:axisId:value:]` stores axis 19/18 → throttle and 23/17 → brake
+  (pressed = v > 0.5); `-[MotionManager onMotionEvent:axisId:value:]` stores axis 0 (AXIS_X), 11
+  (AXIS_Z) and 15 (HAT_X), mixed into `-[MotionManager tilt]` (stick +1 → tilt −0.8). Lean +1 rotates the
+  chassis clockwise (nose down), −1 counter-clockwise (wheelie). Throttle via the bike handler alone does
+  NOT start the race; via the HUD alone it starts but the bike just rolls — the bridge sends to both.
+- **b2Body layout** (from `PhysicsObject.body_`'s type string, consistent with the device-proven
+  +0x44/+0x70): m_xf.p +12/+16, m_sweep.c +52/+56, m_sweep.a +64, m_linearVelocity +68/+72,
+  m_angularVelocity +76, m_world +0x5c, m_prev +0x60, m_next +0x64, m_jointList +0x70 (Box2D 2.1-era,
+  with b2ControllerEdge). Bike parts: `[bike heroTorso]` and the `backWheel_`/`frontWheel_` ivars are
+  PhysicsObjects with `body_`.
+- **Design resolution:** the HudLayer spans 550×320 cocos points (screen 1239×720 on Waydroid).
+- **Polygon → Box2D (INFERRED from names, not traced):** `PhysicsObject` has `triangleList` /
+  `setTriangleList:` — polygons are likely triangulated before becoming fixtures, which would explain
+  why concave / >8-vertex polygons load fine.
+
 ## Open questions (TODO research)
 
 - **Is the game frame-capped? (owner, 2026-10-08 — noted, not fixed.)** VERIFIED on Waydroid: the HUD run

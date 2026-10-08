@@ -16,6 +16,7 @@ typedef void* Class;
 struct RvRuntime {
     uintptr_t base;                       // libgame load base
     id    (*msgSend)(id, SEL, ...);       // libgame's objc_msgSend
+    void  (*msgSend_stret)(void*, id, SEL, ...);   // struct returns (CGPoint/CGSize/CGRect/affine)
     SEL   (*selReg)(const char*);         // sel_registerName
     Class (*getClass)(const char*);       // objc_getClass
     volatile int* step_calls;             // advances once per -[Physics step:] (in-level detector)

@@ -814,7 +814,7 @@ static void install_hooks(){
 
     if(g_en_bridge){                                           // agent bridge (dev): socket + events
         static RvRuntime rt;
-        rt.base=g_base; rt.msgSend=msgSend; rt.selReg=selReg; rt.getClass=getClass;
+        rt.base=g_base; rt.msgSend=msgSend; rt.msgSend_stret=msgSend_stret; rt.selReg=selReg; rt.getClass=getClass;
         rt.step_calls=&g_step_calls; rt.physics=&g_game_self; rt.bike=&g_bike_self; rt.bike_gen=&g_bike_gen;
         rv_bridge_init(&rt, true);
         orig_lvlloaded  =(void(*)(id,SEL,id))inline_hook((void*)(g_base+OFF_LVLLOADED),  (void*)hook_lvlloaded);

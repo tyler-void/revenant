@@ -254,3 +254,19 @@
 - **Prove "loaded" by the postcondition, not the request:** the push helper waits for the game to log
   `[MOD] <lid>.dat` (it read OUR file) and `goto_done` with the right lid + bodies + bike, after a
   unique `RVMARK` proves the log ring has caught up (the ring replays old logcat history first).
+
+## Bridge v1 — driving the game through its own input handlers (2026-10-08)
+
+- **Never call `object_getInstanceVariable` with a name that may not exist.** In Apportable's runtime it
+  crashes BOTH ways: with an out-pointer it dereferences a NULL Ivar for an absent name (SIGSEGV on the
+  first `bike` call), and it writes `*outValue` unconditionally, so NULL crashes too (SIGSEGV at startup).
+  The bridge walks the class chain's ivar lists itself and hands the entry to the runtime's
+  `ivar_getOffset`, so a missing name just returns null.
+- **One input event has several listeners — inject at all of them.** The HUD's gamepad handler only fires
+  the "tap" that starts physics; the bike's handler stores the throttle value. Calling either alone looks
+  half-broken (no race, or a race where the bike just rolls). Send the HUD only the rising edge (a re-press
+  while dead is "retry").
+- **The crash flag in every MCP response paid for itself:** both bridge crashes surfaced in the very
+  response of the call that caused them, with the tombstone lines attached.
+- **Agent latency is seconds.** A 4 s `hold_ms` looked "13 s late" because the next interactive call went
+  out after the agent's own thinking time. Time-sensitive checks belong in one script (or `hold_ms`).

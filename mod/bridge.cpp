@@ -46,6 +46,7 @@ static const char* (*p_className)(id) = 0;
 static void*       (*p_getIvar)(id, const char*, void**) = 0;   // Ivar object_getInstanceVariable
 static ptrdiff_t   (*p_ivarOffset)(void*) = 0;
 static const char* (*p_ivarType)(void*) = 0;
+static void*       (*p_objGetClass)(id) = 0;                  // object_getClass
 
 static double now_mono(){ struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec + t.tv_nsec / 1e9; }
 
@@ -175,10 +176,34 @@ static id find_class(const char* cls, int maxd = 10){
     return 0;
 }
 
+// Find an Ivar by walking the class chain's ivar lists ourselves (GNU old-ABI class: super_class @+4,
+// ivars @+24 -> {int count; {name, type, offset}[count]} — the same layout that parses all 1173 classes
+// statically). object_getInstanceVariable is NOT safe here: with a non-NULL outValue it dereferences a
+// NULL Ivar for an absent name (SIGSEGV on the first `bike` call), and Apportable's copy writes *outValue
+// unconditionally, so a NULL outValue crashes too (SIGSEGV at startup). The entry found is handed to the
+// runtime's own ivar_getOffset, so offsets stay the runtime-realized ones.
+static void* find_ivar(id o, const char* name){
+    if(!o || !p_objGetClass || !name) return 0;
+    char* c = (char*)p_objGetClass(o);
+    for(int depth = 0; c && depth < 32; depth++){
+        if(((uintptr_t)c & 3) != 0) return 0;
+        char* il = *(char**)(c + 24);
+        if(il && ((uintptr_t)il & 3) == 0){
+            int n = *(int*)il;
+            for(int i = 0; i > -1 && i < n && n < 1024; i++){
+                char* e = il + 4 + 12 * i;
+                const char* nm = *(const char**)e;
+                if(nm && !strcmp(nm, name)) return e;
+            }
+        }
+        c = *(char**)(c + 4);                                  // super_class (resolved by the runtime)
+    }
+    return 0;
+}
 // Ivar by name at its runtime-realized offset. Returns false if the object has no such ivar.
 static bool ivar_loc(id o, const char* name, char** where, const char** type){
     if(!o || !p_getIvar || !p_ivarOffset) return false;
-    void* tmp = 0; void* iv = p_getIvar(o, name, &tmp);
+    void* iv = find_ivar(o, name);
     if(!iv) return false;
     *where = (char*)o + p_ivarOffset(iv);
     *type = p_ivarType ? p_ivarType(iv) : "?";
@@ -249,6 +274,13 @@ static std::atomic<bool> g_hidden(false);
 static std::atomic<long> g_frame(0);
 static bool  g_race_started = false;
 static bool  g_in_level = false;          // set each frame by rv_bridge_frame (GL thread)
+static id    g_hud = 0;                   // HudLayer of the current level (cleared when a menu enters)
+// held bridge input (see the v1 input section below)
+struct InputState { float thr = 0, brk = 0, lean = 0; bool dirty = false; double release_at = 0; int resend = 0;
+                    bool thr_down = false, brk_down = false; };   // last pressed state seen by the HUD
+static InputState g_input;
+static bool  g_level_active = false;      // a level is loaded (level_loaded .. a menu screen enters):
+                                          // the captured bike pointer is only valid in between
 static float g_last_gt = -1.0f;
 
 bool rv_overlay_hidden(){ return g_hidden.load(); }
@@ -445,6 +477,9 @@ static void goto_tick(bool in_level){
 // ── level / layer lifecycle callbacks (from mod.cpp hooks) ──────────────────────────────────
 void rv_on_level_loaded(id game){
     g_race_started = false; g_last_gt = -1.0f; g_game_obj = game;
+    g_level_active = true;
+    g_hud = 0;                                         // a new level has a new HudLayer
+    g_input = InputState();                            // no input carried across levels
     int bodies = count_bodies(cur_physics());
     std::string f = "\"lid\":" + js(cur_lid().c_str()) + ",\"bodies\":" + ji(bodies) +
                     ",\"bike_gen\":" + ji(R.bike_gen ? *R.bike_gen : -1);
@@ -454,6 +489,7 @@ void rv_on_level_loaded(id game){
 }
 void rv_on_layer_enter(id layer){
     const char* c = cname(layer);
+    if(!strcmp(c, "LevelSelectionMenu") || !strcmp(c, "MainMenu")) g_level_active = false;
     if(!strncmp(c, "CC", 2)) return;                    // cocos2d internals: noise
     Class menu = R.getClass("CCMenu");                  // menus (MCMenuPassTouch, ...) are noise too
     if(menu && (((int(*)(id,SEL,Class))R.msgSend)(layer, sel("isKindOfClass:"), menu) & 0xff)) return;
@@ -590,6 +626,136 @@ static std::string cmd_goto(const JV& a, std::string& err){
     return b + js(cname(running_scene())) + "}";
 }
 
+// ── bridge v1: input / bike / scene_dump ─────────────────────────────────────────────────────
+// Input goes through the game's own GAMEPAD handlers, called from the GL thread like a real controller
+// event — never inside the physics step (VERIFIED live):
+//   A real gamepad event reaches BOTH of these, so we send to both (VERIFIED by disassembly + live):
+//   -[HudLayer onMotionEvent:axisId:value:]      axes 17/18/19/23 with value > 0.5 -> ONE "tap" (starts
+//      physics; when dead it would retry) — it does NOT pass the value on. Sent on the RISING EDGE only.
+//   -[BikeCommon1 onMotionEvent:axisId:value:]  axis 19 AXIS_THROTTLE / 23 AXIS_BRAKE -> the bike's
+//      axisThrottle / axisBrake (pressed = v > 0.5). Sent on change + re-sent ~4x/s while held.
+//   -[MotionManager onMotionEvent:axisId:value:] axis 0 AXIS_X (left stick) -> mixed into -tilt (stick +1
+//      gave tilt -0.8 and a clockwise chassis spin: lean +1 = forward / nose down, -1 = back / wheelie).
+static id cur_bike(){ return (g_level_active && R.bike) ? *R.bike : 0; }
+static id cur_hud(){
+    if(!g_level_active){ g_hud = 0; return 0; }
+    if(!g_hud) g_hud = find_class("HudLayer", 8);
+    return g_hud;
+}
+static id motion_manager(){ id m = manager(); char* w; const char* t; return m && ivar_loc(m, "motionManager_", &w, &t) ? *(id*)w : 0; }
+static void send_axis(id obj, int axis, float v){
+    if(obj && responds(obj, "onMotionEvent:axisId:value:"))
+        ((void(*)(id,SEL,id,int,float))R.msgSend)(obj, sel("onMotionEvent:axisId:value:"), (id)0, axis, v);
+}
+static void input_tick(){
+    double t = now_mono();
+    if(g_input.release_at > 0 && t >= g_input.release_at){
+        g_input.thr = g_input.brk = g_input.lean = 0; g_input.release_at = 0; g_input.dirty = true;
+        rv_event("input_released", "");
+    }
+    bool active = g_input.thr != 0 || g_input.brk != 0 || g_input.lean != 0;
+    if(!g_input.dirty && !(active && ++g_input.resend >= 15)) return;   // re-send held input ~4x/s
+    g_input.resend = 0; g_input.dirty = false;
+    id hud = cur_hud(), bike = cur_bike();
+    bool thr_down = g_input.thr > 0.5f, brk_down = g_input.brk > 0.5f;
+    if(thr_down && !g_input.thr_down) send_axis(hud, 19, g_input.thr);   // rising edge: start / tap
+    if(brk_down && !g_input.brk_down) send_axis(hud, 23, g_input.brk);
+    g_input.thr_down = thr_down; g_input.brk_down = brk_down;
+    send_axis(bike, 19, g_input.thr);                                      // the held value
+    send_axis(bike, 23, g_input.brk);
+    send_axis(motion_manager(), 0, g_input.lean);
+}
+static std::string cmd_input(const JV& a){
+    if(a.has("release") || a.has("throttle") || a.has("brake") || a.has("lean")){
+        if(a.has("release")){ g_input.thr = g_input.brk = g_input.lean = 0; }
+        if(a.has("throttle")) g_input.thr = (float)std::max(0.0, std::min(1.0, a.num("throttle", 0)));
+        if(a.has("brake"))    g_input.brk = (float)std::max(0.0, std::min(1.0, a.num("brake", 0)));
+        if(a.has("lean"))     g_input.lean = (float)std::max(-1.0, std::min(1.0, a.num("lean", 0)));
+        double hold = a.num("hold_ms", 0);
+        g_input.release_at = hold > 0 ? now_mono() + hold / 1000.0 : 0;
+        g_input.dirty = true;
+        input_tick();                                      // apply now (we are on the GL thread)
+    }
+    char b[200];
+    snprintf(b, sizeof b, "{\"throttle\":%g,\"brake\":%g,\"lean\":%g,\"release_in_ms\":%d,\"hud\":%s,\"bike\":%s,\"motion_manager\":%s}",
+             g_input.thr, g_input.brk, g_input.lean,
+             g_input.release_at > 0 ? (int)((g_input.release_at - now_mono()) * 1000) : 0,
+             jp(cur_hud()).c_str(), jp(cur_bike()).c_str(), jp(motion_manager()).c_str());
+    return b;
+}
+
+// b2Body (layout from PhysicsObject.body_'s type string; consistent with the device-proven +0x44 velocity
+// and +0x70 joint list): m_xf.p +12/+16, m_sweep.c +52/+56, m_sweep.a +64, m_linearVelocity +68/+72,
+// m_angularVelocity +76. Units are Box2D world units (meters), not cocos points.
+static std::string body_json(char* b){
+    if(!b) return "null";
+    float* f = (float*)b;
+    char o[320];
+    float vx = f[17], vy = f[18];
+    snprintf(o, sizeof o, "{\"ptr\":%s,\"pos\":[%.4f,%.4f],\"center\":[%.4f,%.4f],\"angle\":%.5f,\"vel\":[%.4f,%.4f],\"speed\":%.4f,\"ang_vel\":%.4f}",
+             jp(b).c_str(), f[3], f[4], f[13], f[14], f[16], vx, vy, __builtin_sqrtf(vx*vx + vy*vy), f[19]);
+    return o;
+}
+static char* phys_body(id physobj){ char* w; const char* t; return physobj && ivar_loc(physobj, "body_", &w, &t) ? *(char**)w : 0; }
+static std::string cmd_bike(){
+    id bike = cur_bike();
+    if(!bike) return "{\"bike\":null,\"why\":\"no level loaded (or the bike was not captured)\"}";
+    id torso = responds(bike, "heroTorso") ? m0(bike, "heroTorso") : 0;
+    std::string r = "{\"bike\":" + jp(bike) + ",\"class\":" + js(cname(bike)) + ",\"torso\":" + body_json(phys_body(torso));
+    const char* wheels[] = {"backWheel_", "frontWheel_"};
+    for(const char* wn : wheels){
+        char* w; const char* t;
+        if(ivar_loc(bike, wn, &w, &t)) r += ",\"" + std::string(wn, strlen(wn) - 1) + "\":" + body_json(phys_body(*(id*)w));
+    }
+    r += ",\"kill\":" + ivar_json(bike, "kill_") + ",\"dead\":" + ivar_json(bike, "dead_");
+    r += ",\"input\":{\"throttle\":" + jf(g_input.thr) + ",\"brake\":" + jf(g_input.brk) + ",\"lean\":" + jf(g_input.lean) + "}";
+    float rt; if(run_time(&rt)) r += ",\"run_time\":" + jf(rt);
+    return r + ",\"mono\":" + jf(now_mono()) + "}";
+}
+
+// scene_dump: the CCNode tree with WORLD-space bounding boxes (nodeToWorldTransform applied to the
+// content rect), so an agent can find UI elements and level objects without a screenshot.
+struct Affine { float a, b, c, d, tx, ty; };
+struct Size2 { float w, h; };
+struct Point2 { float x, y; };
+static std::string cmd_scene_dump(const JV& a){
+    int maxd = (int)a.num("depth", 6), lim = (int)a.num("limit", 300);
+    std::string cls = a.str("class");
+    bool vis_only = a.has("visible_only") && a.get("visible_only")->b;
+    id root = a.has("ptr") ? resolve_target(a.str("ptr")) : running_scene();
+    std::vector<NodeRef> all; walk(root, 0, maxd, all, 4000);
+    std::string r = "{\"nodes\":["; int k = 0;
+    for(auto& n : all){
+        const char* c = cname(n.o);
+        if(!cls.empty() && strncmp(c, cls.c_str(), cls.size())) continue;
+        int vis = responds(n.o, "visible") ? (mi0(n.o, "visible") & 0xff) : 1;
+        if(vis_only && !vis) continue;
+        if(k >= lim) break;
+        if(k++) r += ",";
+        r += "{\"ptr\":" + jp(n.o) + ",\"class\":" + js(c) + ",\"depth\":" + ji(n.depth) + ",\"visible\":" + ji(vis);
+        if(responds(n.o, "zOrder")) r += ",\"z\":" + ji(mi0(n.o, "zOrder"));
+        if(responds(n.o, "tag")) r += ",\"tag\":" + ji(mi0(n.o, "tag"));
+        if(R.msgSend_stret && responds(n.o, "nodeToWorldTransform") && responds(n.o, "contentSize")){
+            Affine T{}; Size2 S{}; Point2 P{};
+            R.msgSend_stret(&T, n.o, sel("nodeToWorldTransform"));
+            R.msgSend_stret(&S, n.o, sel("contentSize"));
+            R.msgSend_stret(&P, n.o, sel("position"));
+            float xs[4] = {0, S.w, 0, S.w}, ys[4] = {0, 0, S.h, S.h};
+            float mnx = 1e30f, mny = 1e30f, mxx = -1e30f, mxy = -1e30f;
+            for(int i = 0; i < 4; i++){
+                float X = T.a * xs[i] + T.c * ys[i] + T.tx, Y = T.b * xs[i] + T.d * ys[i] + T.ty;
+                mnx = std::min(mnx, X); mny = std::min(mny, Y); mxx = std::max(mxx, X); mxy = std::max(mxy, Y);
+            }
+            char b[200];
+            snprintf(b, sizeof b, ",\"pos\":[%.1f,%.1f],\"size\":[%.1f,%.1f],\"world_bbox\":[%.1f,%.1f,%.1f,%.1f]",
+                     P.x, P.y, S.w, S.h, mnx, mny, mxx, mxy);
+            r += b;
+        }
+        r += "}";
+    }
+    return r + "],\"scanned\":" + ji((long long)all.size()) + "}";
+}
+
 // ── GL-thread queue ──────────────────────────────────────────────────────────────────────────
 struct Job {
     std::string cmd; JV args; std::string result, error; bool done = false;
@@ -606,6 +772,9 @@ static void run_on_gl(Job& j){
     else if(j.cmd == "ivar")     j.result = cmd_ivar(j.args, j.error);
     else if(j.cmd == "call")     j.result = cmd_call(j.args, j.error);
     else if(j.cmd == "goto_level") j.result = cmd_goto(j.args, j.error);
+    else if(j.cmd == "input")    j.result = cmd_input(j.args);
+    else if(j.cmd == "bike")     j.result = cmd_bike();
+    else if(j.cmd == "scene_dump") j.result = cmd_scene_dump(j.args);
     else j.error = "unknown command: " + j.cmd;
 }
 
@@ -621,6 +790,7 @@ void rv_bridge_frame(bool in_level){
     }
     if(!todo.empty()) g_q_cv.notify_all();
     goto_tick(in_level);
+    input_tick();
     track_race(in_level);
 }
 
@@ -721,6 +891,7 @@ void rv_bridge_init(const RvRuntime* rt, bool listen){
         p_getIvar    = (void*(*)(id,const char*,void**))dlsym(h, "object_getInstanceVariable");
         p_ivarOffset = (ptrdiff_t(*)(void*))dlsym(h, "ivar_getOffset");
         p_ivarType   = (const char*(*)(void*))dlsym(h, "ivar_getTypeEncoding");
+        p_objGetClass= (void*(*)(id))dlsym(h, "object_getClass");
     }
     BLOG("bridge runtime: className=%p getIvar=%p ivarOffset=%p ivarType=%p",
          (void*)p_className, (void*)p_getIvar, (void*)p_ivarOffset, (void*)p_ivarType);

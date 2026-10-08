@@ -84,11 +84,19 @@ arrives before your wait starts. `regex` matches `"L TAG: message"`.
 | `ivar` | `ptr, name` or `names[]` | values read BY NAME at runtime-realized offsets |
 | `call` | `target ("0x…" or "+Class"), sel, args[≤4], ret (v,i,f,B,@,s)` | arbitrary method call (dev only). Args: numbers, `"0x…"`, `{"f":1.5}`, `{"nsnumber":24}` |
 | `log` | `msg` | writes `RVMARK msg` to logcat (align bridge + log timelines) |
+| `input` | `throttle 0..1, brake 0..1, lean -1..1, hold_ms, release` | held game input through the game's own gamepad handlers (HUD rising edge starts the race; the bike gets the held value; lean via MotionManager). Several at once is fine. `hold_ms` auto-releases (`input_released` event) |
+| `bike` | | chassis + wheels: `pos`, `center`, `angle` (rad, + = CCW / nose up), `vel`, `speed`, `ang_vel` (Box2D world units), `dead`, current input, `run_time`, `mono` |
+| `scene_dump` | `depth, limit, class (prefix), visible_only, ptr` | CCNode tree with `z`, `tag`, `visible`, `pos`, `size` and `world_bbox` in cocos points (design resolution 550×320) |
 
 Events (ring of 512 + logcat line `RVEVT {"seq":N,"type":"…","mono":T,…}` under tag `RVMOD`):
 `scene_ready{class}`, `goto_progress{step}`, `goto_done{lid,bodies,bodies_added,bike,attempt}`,
 `goto_retry{reason}`, `goto_failed`, `level_loaded{lid,bodies,bike_gen}`, `race_start{run_time}`,
 `finish{run_time}`, `death{kill,dead,exploded}`, `alive`, `menu_did_finish_loading`.
+
+Driving (Bike Rivals, VERIFIED): `input {throttle:1}` starts the race and accelerates; `input {lean:-1}` =
+lean back (nose up / wheelie), `+1` = forward; `input {brake:1}` slows; `input {release:true}` lets go.
+Script it (`tools/device/acceptance_bridge_v1.py`) — the agent's own latency between interactive calls
+is seconds, so time-sensitive sequences belong in one script or in `hold_ms`.
 
 Timer checks: use two `state` calls and compare Δ`run_time` / Δ`mono` (both sampled on the GL thread in
 the same frame — no adb noise). The game adds exactly 1/60 s per physics step and steps once per rendered
