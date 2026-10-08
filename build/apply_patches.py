@@ -13,20 +13,20 @@ Revenant — Bike Rivals 1.5.2 smali patcher.
      The game never enables the accelerometer on Android 13+ (confirmed via
      dumpsys: accelerometer never registers in-race), and Android 12+ blocks
      accelerometer access without HIGH_SAMPLING_RATE_SENSORS on this hardware.
-     Fix (from the user's proven New-Year-2026 mod, ref/re-stuffs):
+     Fix (anchored edits on the decoded ORIGINAL smali — same semantics as the
+     browser patcher's wasm dex_tilt_rewrite, so the CLI and web builds match):
        - add HIGH_SAMPLING_RATE_SENSORS permission,
        - register() always registers (no isEnabled gate),
        - unregister() neutered (sensor stays on),
-       - onSensorChanged() fixed landscape mapping; we also drop its isEnabled
-         gate so it processes even if the game never calls setEnabled(true).
+       - onSensorChanged() rewritten: fixed landscape mapping, no isEnabled
+         gate, native call wrapped in a catch-all (see patch_tilt).
 
-Usage:  python3 apply_patches.py <decode_dir> [--no-tilt]
+Usage:  python3 apply_patches.py <decode_dir> [--no-tilt] [--no-native] [--no-perms] [--no-diag]
+        --no-diag drops the BR_TILT setEnabled logcat line (the final, logging-free build).
 """
 import sys, os, json
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-REF_ACC = os.path.join(HERE, "..", "ref", "re-stuffs", "bike-rivals", "smali",
-                       "com", "miniclip", "input", "MCAccelerometer.smali")
 # Shared declarative manifest (single source for CLI + browser patcher). Native byte-patches and
 # the dropped-permissions list come from here so the two paths can never drift apart.
 PATCH_MANIFEST = json.load(open(os.path.join(HERE, "..", "patches", "manifest.json")))
@@ -84,49 +84,103 @@ def patch_manifest(root):
     print("[manifest] added HIGH_SAMPLING_RATE_SENSORS")
 
 
-def patch_tilt(root):
-    # use the user's proven MCAccelerometer VERBATIM (force-register + neutered
-    # unregister + onSensorChanged isEnabled guard). The isEnabled guard is load-
-    # bearing: it stops the force-registered sensor from invoking the *native*
-    # onSensorChanged before libgame.so has bound it (otherwise UnsatisfiedLinkError).
-    ref = open(REF_ACC).read()
-    # add a setEnabled log so we can confirm the game enables tilt (opens the guard)
-    se = (".method public static setEnabled(Z)V\n    .locals 1\n"
-          '    .param p0, "enabled"    # Z\n\n    .prologue\n')
-    if ref.count(se) == 1:
-        ref = ref.replace(se,
-            ".method public static setEnabled(Z)V\n    .locals 2\n"
-            '    .param p0, "enabled"    # Z\n\n    .prologue\n'
-            "    invoke-static {p0}, Ljava/lang/String;->valueOf(Z)Ljava/lang/String;\n\n"
-            "    move-result-object v1\n\n"
-            '    const-string v0, "BR_TILT"\n\n'
-            "    invoke-static {v0, v1}, Landroid/util/Log;->d(Ljava/lang/String;Ljava/lang/String;)I\n\n")
-    # The game never calls setEnabled(true) here, so the isEnabled guard stays
-    # shut and tilt never forwards. Remove the guard (always forward) but wrap the
-    # NATIVE onSensorChanged call in try/catch UnsatisfiedLinkError, so the early
-    # events that fire before libgame.so binds the native method are swallowed
-    # instead of crashing; forwarding begins the moment the native binds.
-    guard = ("    sget-boolean v0, Lcom/miniclip/input/MCAccelerometer;->isEnabled:Z\n"
-             "    if-nez v0, :cond_go\n"
-             "    return-void\n")
-    assert ref.count(guard) == 1, f"onSensorChanged guard anchor count={ref.count(guard)}"
-    ref = ref.replace(guard, "    # isEnabled guard removed; native call is try/catch-guarded\n")
+# Tilt fix as anchored edits on the decoded ORIGINAL MCAccelerometer (no external smali), mirroring
+# the browser patcher's wasm dex_tilt_rewrite so the CLI and web builds ship the same fix. Every
+# anchor is asserted before the single write: a half-applied fix is the CRASHING config — a
+# force-registered sensor fires before libgame.so binds the native onSensorChanged(FFFJ)
+# (UnsatisfiedLinkError), which the catch-all below swallows. See docs/TILT-FIX.md.
+ON_SENSOR_CHANGED = """.method public onSensorChanged(Landroid/hardware/SensorEvent;)V
+    .locals 7
+    .param p1, "event"    # Landroid/hardware/SensorEvent;
 
-    native_call = ("    invoke-static {v0, v1, v2, v3, v4}, Lcom/miniclip/input/MCAccelerometer;->onSensorChanged(FFFJ)V\n\n"
-                   "    return-void\n.end method")
-    assert ref.count(native_call) == 1, f"native-call anchor count={ref.count(native_call)}"
-    ref = ref.replace(native_call,
-        "    :try_start_0\n"
-        "    invoke-static {v0, v1, v2, v3, v4}, Lcom/miniclip/input/MCAccelerometer;->onSensorChanged(FFFJ)V\n"
-        "    :try_end_0\n"
-        "    .catch Ljava/lang/UnsatisfiedLinkError; {:try_start_0 .. :try_end_0} :catch_0\n\n"
-        "    return-void\n\n"
-        "    :catch_0\n"
-        "    move-exception v0\n\n"
-        "    return-void\n.end method")
+    iget-object v0, p1, Landroid/hardware/SensorEvent;->sensor:Landroid/hardware/Sensor;
 
-    open(os.path.join(root, ACC), "w").write(ref)
-    print("[tilt] MCAccelerometer: force-register, neutered unregister, always-forward + try/catch native call")
+    invoke-virtual {v0}, Landroid/hardware/Sensor;->getType()I
+
+    move-result v0
+
+    const/4 v1, 0x1
+
+    if-eq v0, v1, :cond_process
+
+    return-void
+
+    :cond_process
+    iget-object v6, p1, Landroid/hardware/SensorEvent;->values:[F
+
+    const/4 v0, 0x1
+
+    aget v0, v6, v0
+
+    const/4 v1, 0x0
+
+    aget v1, v6, v1
+
+    neg-float v1, v1
+
+    const/4 v2, 0x2
+
+    aget v2, v6, v2
+
+    iget-wide v3, p1, Landroid/hardware/SensorEvent;->timestamp:J
+
+    :try_start_0
+    invoke-static {v0, v1, v2, v3, v4}, Lcom/miniclip/input/MCAccelerometer;->onSensorChanged(FFFJ)V
+    :try_end_0
+    .catchall {:try_start_0 .. :try_end_0} :catchall_0
+
+    return-void
+
+    :catchall_0
+    move-exception v0
+
+    return-void
+.end method"""
+
+
+def _method_span(s, header):
+    # (start, end) of the method whose `.method` line is exactly `header`; end is past `.end method`.
+    n = s.count(header + "\n")
+    assert n == 1, f"[tilt] method {header!r} count={n} (not the 1.5.2 MCAccelerometer?)"
+    a = s.index(header + "\n")
+    return a, s.index(".end method", a) + len(".end method")
+
+
+def _edit_method(s, header, old, new):
+    a, b = _method_span(s, header)
+    body = s[a:b]
+    assert body.count(old) == 1, f"[tilt] anchor count={body.count(old)} in {header!r}"
+    return s[:a] + body.replace(old, new) + s[b:]
+
+
+def patch_tilt(root, diag=True):
+    p = os.path.join(root, ACC)
+    s = open(p).read()
+    # register(): drop the isEnabled gate — the game only ever calls setEnabled(false) here, so the
+    # gate kept the listener off; now it registers whenever onResume/onWindowFocusChanged call it.
+    s = _edit_method(s, ".method private register()V",
+                     "    sget-boolean v0, Lcom/miniclip/input/MCAccelerometer;->isEnabled:Z\n\n"
+                     "    if-eqz v0, :cond_0\n\n", "")
+    # unregister(): no-op, so once registered the sensor stays on across the lifecycle.
+    a, b = _method_span(s, ".method private unregister()V")
+    s = s[:a] + ".method private unregister()V\n    .locals 0\n\n    return-void\n.end method" + s[b:]
+    # onSensorChanged(SensorEvent): fixed landscape map (gameX=sensorY, gameY=-sensorX, gameZ=sensorZ),
+    # no isEnabled gate, native call wrapped in a catch-all.
+    a, b = _method_span(s, ".method public onSensorChanged(Landroid/hardware/SensorEvent;)V")
+    s = s[:a] + ON_SENSOR_CHANGED + s[b:]
+    if diag:
+        # BR_TILT logcat line on setEnabled, to see whether/how the game toggles tilt.
+        s = _edit_method(s, ".method public static setEnabled(Z)V", "    .locals 1\n", "    .locals 2\n")
+        s = _edit_method(s, ".method public static setEnabled(Z)V",
+                         "    sput-boolean p0, Lcom/miniclip/input/MCAccelerometer;->isEnabled:Z\n",
+                         "    invoke-static {p0}, Ljava/lang/String;->valueOf(Z)Ljava/lang/String;\n\n"
+                         "    move-result-object v1\n\n"
+                         '    const-string v0, "BR_TILT"\n\n'
+                         "    invoke-static {v0, v1}, Landroid/util/Log;->d(Ljava/lang/String;Ljava/lang/String;)I\n\n"
+                         "    sput-boolean p0, Lcom/miniclip/input/MCAccelerometer;->isEnabled:Z\n")
+    open(p, "w").write(s)
+    print("[tilt] MCAccelerometer: force-register, neutered unregister, landscape map + catch-all native call"
+          + (" (+BR_TILT log)" if diag else ""))
     patch_manifest(root)
 
 
@@ -186,7 +240,7 @@ if __name__ == "__main__":
     root = sys.argv[1]
     patch_unlock(root)
     if "--no-tilt" not in sys.argv:
-        patch_tilt(root)
+        patch_tilt(root, diag="--no-diag" not in sys.argv)
     if "--no-native" not in sys.argv:
         patch_native(root)
     if "--no-perms" not in sys.argv:
