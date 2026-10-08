@@ -51,7 +51,8 @@ extern "C" {
 #define OFF_CLICKSTATS 0x5a3db0 // -[? clickStats:] — Stats button handler (online; fails offline)
 #define OFF_LVLLOADED   0x6df2fc // -[MotoXGame levelLoaded:(id)]   — once per level load (bridge events)
 #define OFF_LVLFINISHED 0x6e01ec // -[MotoXGame levelFinished:(id)] — once per finish (bridge events)
-#define OFF_LSM_READY   0x567868 // -[LevelSelectionMenu didFinishLoading] — career map built (bridge goto)
+#define OFF_LSM_READY   0x567868 // -[LevelSelectionMenu didFinishLoading] — fires when a level STARTS loading
+#define OFF_LAYER_ENTER 0x48bc54 // -[CCLayer onEnterTransitionDidFinish] — a menu/layer finished entering
 // _OBJC_IVAR_$_BikeCommon1.backWheel_ — the ObjC runtime writes the REALIZED ivar offset here at
 // load (Apportable realizes class layouts at runtime, so it is NOT the static 0x54). Read it at
 // runtime to find backWheel_ on the bike. The wheel is a PhysicsObject; its [body] = b2Body*.
@@ -349,7 +350,8 @@ static float g_mspeed=1, g_mnitro=1, g_mforce=1, g_mburn=1, g_mwheelie=1;       
 static float g_pmspeed=1,g_pmnitro=1,g_pmforce=1,g_pmburn=1,g_pmwheelie=1;          // previous (for reset one-shot)
 static bool  g_spec_have = false;
 
-static void hook_sspeed (id s,SEL c,float v){ g_bike_self=s; g_bspeed=v;   g_spec_have=true; orig_sspeed (s,c,v*g_mspeed);  }
+static volatile int g_bike_gen = 0;   // +1 per bike setup (bridge postcondition: "the bike exists")
+static void hook_sspeed (id s,SEL c,float v){ g_bike_gen++; g_bike_self=s; g_bspeed=v;   g_spec_have=true; orig_sspeed (s,c,v*g_mspeed);  }
 static float nitro_val(float v){ float n=v; if(n>1.6f) n=1.6f; return n; }  // >~1.65 = runaway nitro
 static void hook_snitro (id s,SEL c,float v){ g_bike_self=s; g_bnitro=v;   g_spec_have=true; orig_snitro (s,c,nitro_val(v*g_mnitro)); }
 static void hook_sforce (id s,SEL c,float v){ g_bike_self=s; g_bforce=v;   g_spec_have=true; orig_sforce (s,c,v*g_mforce);  }
@@ -464,7 +466,9 @@ static void (*orig_lvlloaded)(id,SEL,id)=0;
 static void (*orig_lvlfinished)(id,SEL,id)=0;
 static void (*orig_lsmready)(id,SEL)=0;
 static void hook_lsmready(id self, SEL cmd){ orig_lsmready(self,cmd); rv_on_menu_ready(self); }
-static void hook_lvlloaded(id self, SEL cmd, id info){ orig_lvlloaded(self,cmd,info); rv_on_level_loaded(); }
+static void hook_lvlloaded(id self, SEL cmd, id info){ orig_lvlloaded(self,cmd,info); rv_on_level_loaded(self); }
+static void (*orig_layerenter)(id,SEL)=0;
+static void hook_layerenter(id self, SEL cmd){ orig_layerenter(self,cmd); rv_on_layer_enter(self); }
 static void hook_lvlfinished(id self, SEL cmd, id res){ rv_on_level_finished(res); orig_lvlfinished(self,cmd,res); }
 
 static void hook_clickstats(id self, SEL cmd, id sender){
@@ -811,11 +815,12 @@ static void install_hooks(){
     if(g_en_bridge){                                           // agent bridge (dev): socket + events
         static RvRuntime rt;
         rt.base=g_base; rt.msgSend=msgSend; rt.selReg=selReg; rt.getClass=getClass;
-        rt.step_calls=&g_step_calls; rt.physics=&g_game_self; rt.bike=&g_bike_self;
+        rt.step_calls=&g_step_calls; rt.physics=&g_game_self; rt.bike=&g_bike_self; rt.bike_gen=&g_bike_gen;
         rv_bridge_init(&rt, true);
         orig_lvlloaded  =(void(*)(id,SEL,id))inline_hook((void*)(g_base+OFF_LVLLOADED),  (void*)hook_lvlloaded);
         orig_lvlfinished=(void(*)(id,SEL,id))inline_hook((void*)(g_base+OFF_LVLFINISHED),(void*)hook_lvlfinished);
         orig_lsmready   =(void(*)(id,SEL))   inline_hook((void*)(g_base+OFF_LSM_READY),   (void*)hook_lsmready);
+        orig_layerenter =(void(*)(id,SEL))   inline_hook((void*)(g_base+OFF_LAYER_ENTER), (void*)hook_layerenter);
         LOGI("bridge on (levelLoaded=%p levelFinished=%p menuReady=%p)", (void*)orig_lvlloaded, (void*)orig_lvlfinished, (void*)orig_lsmready);
     }
 }

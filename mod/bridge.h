@@ -20,6 +20,7 @@ struct RvRuntime {
     volatile int* step_calls;             // advances once per -[Physics step:] (in-level detector)
     id volatile*  physics;                // last -[Physics step:] self (owns gameTime_)
     id volatile*  bike;                   // current bike (captured by the bike-spec setter hooks)
+    volatile int* bike_gen;               // +1 each time a bike is set up (setSpeedLimit: hook)
 };
 
 // Resolve the runtime helpers (dlsym into libgame) and, when `listen` is true, start the socket thread.
@@ -31,9 +32,11 @@ void rv_event(const char* type, const char* fields);
 // Level file seen by the encrypted-file reader (basename like "1_24.dat"); sets the current lid.
 void rv_note_level_file(const char* basename);
 // level_loaded / finish helpers for the MotoXGame hooks.
-void rv_on_level_loaded();
+void rv_on_level_loaded(id game);            // game = MotoXGame (self of levelLoaded:)
 void rv_on_level_finished(id arg);
 // -[LevelSelectionMenu didFinishLoading] fired: the career map is built and safe to start a level from.
 void rv_on_menu_ready(id menu);
+// A game CCLayer finished entering (-[CCLayer onEnterTransitionDidFinish]): emits scene_ready.
+void rv_on_layer_enter(id layer);
 // True while the agent asked to hide the ImGui overlay (overlay hidden).
 bool rv_overlay_hidden();

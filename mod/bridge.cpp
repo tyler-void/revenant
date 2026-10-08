@@ -250,8 +250,6 @@ static std::atomic<long> g_frame(0);
 static bool  g_race_started = false;
 static bool  g_in_level = false;          // set each frame by rv_bridge_frame (GL thread)
 static float g_last_gt = -1.0f;
-static std::atomic<id> g_lsm_ready(nullptr);   // LevelSelectionMenu that reported didFinishLoading
-static std::atomic<double> g_lsm_ready_t(0.0);
 
 bool rv_overlay_hidden(){ return g_hidden.load(); }
 
@@ -267,12 +265,7 @@ void rv_note_level_file(const char* base){
 static std::string cur_lid(){ std::lock_guard<std::mutex> lk(g_lid_mu); return g_lid; }
 
 void rv_on_menu_ready(id menu){
-    g_lsm_ready = menu; g_lsm_ready_t = now_mono();
     rv_event("menu_ready", ("\"menu\":" + js(cname(menu)) + ",\"ptr\":" + jp(menu)).c_str());
-}
-void rv_on_level_loaded(){
-    g_race_started = false; g_last_gt = -1.0f;
-    rv_event("level_loaded", ("\"lid\":" + js(cur_lid().c_str())).c_str());
 }
 void rv_on_level_finished(id arg){
     float gt = -1.0f;
@@ -296,74 +289,164 @@ static void track_race(bool in_level){
     g_last_gt = gt;
 }
 
+// ── Box2D / level postcondition helpers ──────────────────────────────────────────────────────
+// b2Body layout (Box2D 2.1-era, matches the device-proven m_linearVelocity@0x44 / m_jointList@0x70):
+// m_world@0x5c, m_prev@0x60, m_next@0x64. Bodies are prepended to the world list, so walking m_prev
+// from Physics._groundBody (created first) and m_next back gives the world's body count.
+static id manager(){ Class c = R.getClass("Manager"); return c ? m0((id)c, "sharedManager") : 0; }
+static id cur_physics(){                                  // via the Manager: never a stale step pointer
+    id mgr = manager(); char* w; const char* t;
+    return mgr && ivar_loc(mgr, "physics_", &w, &t) ? *(id*)w : 0;
+}
+static int count_bodies(id phys){
+    char* w; const char* t;
+    if(!phys || !ivar_loc(phys, "_groundBody", &w, &t)) return -1;
+    char* gb = *(char**)w;
+    if(!gb) return 0;
+    int n = 1;
+    for(char* b = *(char**)(gb + 0x60); b && n < 20000; b = *(char**)(b + 0x60)) n++;
+    for(char* b = *(char**)(gb + 0x64); b && n < 20000; b = *(char**)(b + 0x64)) n++;
+    return n;
+}
+
 // ── goto_level job (multi-frame state machine on the GL thread) ──────────────────────────────
-// Story worlds have 30/40/45/15 levels; startLevelWithNumber: takes a boxed number (types v12@0:4@8).
+// Calls exactly what the buttons call (verified by disassembly + live):
+//   map:    -[MainMenu loadLevelSelectionMenu]
+//   dot:    -[LevelDot selectAndDisplayDetail]          (LevelDot._number == level number)
+//   RACE:   -[LevelDetail race]  -> [_delegate performSelector:@selector(startLevelWithNumber:)
+//                                     withObject:[NSNumber numberWithInt:_levelNumber]]
+// Calling startLevelWithNumber: without a selected dot loads an EMPTY level (no level file read), so
+// the postcondition is checked: lid matches, the bike was created, and the Box2D world has bodies.
+// On failure: -[MotoXGame exitToMenu] and retry (max_attempts), then goto_failed.
 static const int WORLD_SIZES[] = {30, 40, 45, 15};
+enum GPhase { G_NAV, G_DETAIL, G_LOADING, G_VERIFY };
 struct GotoJob {
-    bool active = false; int w = 0, l = 0, n = 0; std::string arg_kind;
-    double t0 = 0, last_action = 0, ready_since = 0, last_wait_ev = 0; int phase = 0;
+    bool active = false; int w = 0, l = 0, n = 0, attempt = 1, max_attempts = 3;
+    std::string want; GPhase ph = G_NAV;
+    double t0 = 0, ph_t = 0, last_action = 0, loaded_t = 0;
+    bool asked_map = false, selected = false, raced = false, loaded = false;
+    int bike_gen0 = 0, bodies0 = 0;
 };
 static GotoJob g_goto;
+static id g_game_obj = 0;                 // MotoXGame (self of levelLoaded:), for exitToMenu
 
 static int level_number(int w, int l){
     int n = 0;
     for(int i = 1; i < w && i <= 4; i++) n += WORLD_SIZES[i - 1];
     return n + l;
 }
-static id boxed(int n, const std::string& kind){
-    if(kind == "int") return (id)(uintptr_t)n;
-    Class num = R.getClass("NSNumber");
-    return num ? m1((id)num, "numberWithInt:", (uint32_t)n) : 0;
+static void goto_phase(GPhase p){ g_goto.ph = p; g_goto.ph_t = now_mono(); }
+static id find_dot(int n){
+    std::vector<NodeRef> all; walk(running_scene(), 0, 12, all, 4000);
+    for(auto& r : all) if(!strcmp(cname(r.o), "LevelDot")){
+        int32_t num = -1; if(ivar_word(r.o, "_number", &num) && num == n) return r.o;
+    }
+    return 0;
 }
-static void goto_tick(){
-    if(!g_goto.active) return;
-    double t = now_mono();
-    if(t - g_goto.t0 > 30.0){
+static void goto_retry(const char* why){
+    char f[160]; snprintf(f, sizeof f, "\"reason\":\"%s\",\"attempt\":%d", why, g_goto.attempt);
+    if(g_goto.attempt >= g_goto.max_attempts){
         g_goto.active = false;
-        rv_event("goto_failed", ("\"reason\":\"timeout\",\"scene\":" + js(cname(running_scene()))).c_str());
+        rv_event("goto_failed", (std::string(f) + ",\"scene\":" + js(cname(running_scene()))).c_str());
         return;
     }
-    if(t - g_goto.last_action < 0.5) return;            // let scene transitions settle
-    id lsm = find_class("LevelSelectionMenu");
-    if(lsm){
-        // The menu builds asynchronously: calling startLevelWithNumber: too early loads an EMPTY level
-        // (no level file read). Wait until it has entered + built its level dots, then settle briefly.
-        // Ready = THIS menu instance reported -[LevelSelectionMenu didFinishLoading] (hooked in mod.cpp).
-        // (entered_/inputEnabled_/_levelDotData were tried first: entered_ never flips, and the other
-        // two are set ~0.8 s in, still too early — calling then loaded an empty level.)
-        int32_t entered = 0, input = 0, dots = 0;
-        ivar_word(lsm, "entered_", &entered); ivar_word(lsm, "inputEnabled_", &input);
-        ivar_word(lsm, "_levelDotData", &dots);
-        bool ready = g_lsm_ready.load() == lsm;
-        if(!ready){
-            g_goto.ready_since = 0;
-            if(t - g_goto.last_wait_ev > 1.0){
-                g_goto.last_wait_ev = t;
-                char f[96]; snprintf(f, sizeof f, "\"entered\":%d,\"input\":%d,\"dots\":%d", entered, input, dots != 0);
-                rv_event("goto_wait", f);
+    rv_event("goto_retry", f);
+    if(g_goto.loaded && g_game_obj) ((void(*)(id,SEL))R.msgSend)(g_game_obj, sel("exitToMenu"));   // back out
+    g_goto.attempt++; g_goto.asked_map = g_goto.selected = g_goto.raced = g_goto.loaded = false;
+    g_goto.last_action = now_mono();
+    goto_phase(G_NAV);
+}
+static void goto_tick(bool in_level){
+    if(!g_goto.active) return;
+    double t = now_mono();
+    if(t - g_goto.last_action < 0.25) return;                  // pace actions; scene changes need frames
+    if(t - g_goto.ph_t > 20.0){ goto_retry("phase_timeout"); return; }
+    char f[200];
+    switch(g_goto.ph){
+    case G_NAV: {
+        if(in_level && !g_goto.raced){                          // in some other level: back out first
+            if(g_game_obj && t - g_goto.last_action > 2.0){
+                g_goto.last_action = t;
+                ((void(*)(id,SEL))R.msgSend)(g_game_obj, sel("exitToMenu"));
+                rv_event("goto_progress", "\"step\":\"exitToMenu\"");
             }
             return;
         }
-        if(g_goto.ready_since == 0){ g_goto.ready_since = t; return; }
-        if(t - g_goto.ready_since < 0.5) return;
-        g_goto.last_action = t;
-        id arg = boxed(g_goto.n, g_goto.arg_kind);
-        ((void(*)(id,SEL,id))R.msgSend)(lsm, sel("startLevelWithNumber:"), arg);
-        g_goto.active = false;
-        char f[96]; snprintf(f, sizeof f, "\"w\":%d,\"l\":%d,\"n\":%d,\"via\":\"startLevelWithNumber:\"", g_goto.w, g_goto.l, g_goto.n);
-        rv_event("goto_called", f);
-        return;
-    }
-    const char* hops[][2] = { {"MainMenu", "loadLevelSelectionMenu"}, {"MainLayer", "loadLevelSelectionMenu"} };
-    for(auto& h : hops){
-        id o = find_class(h[0]);
-        if(o && g_goto.phase == 0){
-            g_goto.last_action = t; g_goto.phase = 1;
-            ((void(*)(id,SEL))R.msgSend)(o, sel(h[1]));
-            rv_event("goto_progress", ("\"step\":" + js(h[1]) + ",\"on\":" + js(h[0])).c_str());
+        id dot = find_dot(g_goto.n);
+        if(dot){
+            g_goto.last_action = t;
+            ((void(*)(id,SEL))R.msgSend)(dot, sel("selectAndDisplayDetail"));
+            snprintf(f, sizeof f, "\"step\":\"selectAndDisplayDetail\",\"dot\":%s", jp(dot).c_str());
+            rv_event("goto_progress", f);
+            goto_phase(G_DETAIL);
             return;
         }
+        if(!g_goto.asked_map){
+            for(const char* c : {"MainMenu", "MainLayer"}){
+                id o = find_class(c);
+                if(o && responds(o, "loadLevelSelectionMenu")){
+                    g_goto.asked_map = true; g_goto.last_action = t;
+                    ((void(*)(id,SEL))R.msgSend)(o, sel("loadLevelSelectionMenu"));
+                    rv_event("goto_progress", ("\"step\":\"loadLevelSelectionMenu\",\"on\":" + js(c)).c_str());
+                    return;
+                }
+            }
+        }
+        return;                                                 // wait for the map / its dots
     }
+    case G_DETAIL: {
+        id det = find_class("LevelDetail", 12);
+        int32_t num = -1;
+        if(!det || !ivar_word(det, "_levelNumber", &num) || num != g_goto.n) return;
+        if(t - g_goto.ph_t < 0.6) return;                      // let the panel finish its open animation
+        g_goto.bike_gen0 = R.bike_gen ? *R.bike_gen : 0;
+        g_goto.bodies0 = count_bodies(cur_physics());
+        { std::lock_guard<std::mutex> lk(g_lid_mu); g_lid[0] = 0; }   // stale lid must not pass the check
+        g_goto.raced = true; g_goto.loaded = false; g_goto.last_action = t;
+        ((void(*)(id,SEL))R.msgSend)(det, sel("race"));
+        rv_event("goto_progress", "\"step\":\"race\"");
+        goto_phase(G_LOADING);
+        return;
+    }
+    case G_LOADING:
+        if(g_goto.loaded) goto_phase(G_VERIFY);
+        return;
+    case G_VERIFY: {
+        // (no in_level gate: the physics step doesn't run until the first throttle input)
+        if(t - g_goto.loaded_t < 1.0) return;                   // let the level finish building
+        std::string lid = cur_lid();
+        int bodies = count_bodies(cur_physics());
+        int added = bodies - g_goto.bodies0;                    // the world keeps bodies across loads
+        bool bike = R.bike_gen && *R.bike_gen != g_goto.bike_gen0;
+        bool ok = lid == g_goto.want && added > 1 && bike;
+        snprintf(f, sizeof f, "\"lid\":%s,\"want\":%s,\"bodies\":%d,\"bodies_added\":%d,\"bike\":%s,\"attempt\":%d",
+                 js(lid.c_str()).c_str(), js(g_goto.want.c_str()).c_str(), bodies, added, bike ? "true" : "false", g_goto.attempt);
+        if(ok){ g_goto.active = false; rv_event("goto_done", f); return; }
+        if(t - g_goto.loaded_t > 4.0){ rv_event("goto_check_failed", f); goto_retry("postcondition"); }
+        return;
+    }
+    }
+}
+
+// ── level / layer lifecycle callbacks (from mod.cpp hooks) ──────────────────────────────────
+void rv_on_level_loaded(id game){
+    g_race_started = false; g_last_gt = -1.0f; g_game_obj = game;
+    int bodies = count_bodies(cur_physics());
+    std::string f = "\"lid\":" + js(cur_lid().c_str()) + ",\"bodies\":" + ji(bodies) +
+                    ",\"bike_gen\":" + ji(R.bike_gen ? *R.bike_gen : -1);
+    if(g_goto.active && g_goto.raced) f += ",\"bodies_added\":" + ji(bodies - g_goto.bodies0);
+    rv_event("level_loaded", f.c_str());
+    if(g_goto.active && g_goto.raced && !g_goto.loaded){ g_goto.loaded = true; g_goto.loaded_t = now_mono(); }
+}
+void rv_on_layer_enter(id layer){
+    const char* c = cname(layer);
+    if(!strncmp(c, "CC", 2)) return;                    // cocos2d internals: noise
+    Class menu = R.getClass("CCMenu");                  // menus (MCMenuPassTouch, ...) are noise too
+    if(menu && (((int(*)(id,SEL,Class))R.msgSend)(layer, sel("isKindOfClass:"), menu) & 0xff)) return;
+    id sc = running_scene(); int depth = 0;              // only screens near the top: not level entities
+    for(id p = layer; p && p != sc && depth < 8; p = m0(p, "parent")) depth++;
+    if(depth > 3) return;
+    rv_event("scene_ready", ("\"class\":" + js(c) + ",\"ptr\":" + jp(layer)).c_str());
 }
 
 // ── command execution ────────────────────────────────────────────────────────────────────────
@@ -380,16 +463,21 @@ static std::string cmd_state(){
     r += ",\"scene\":" + scene_summary();
     r += ",\"lid\":" + js(cur_lid().c_str());
     r += ",\"overlay\":" + js(g_hidden.load() ? "hidden" : "open");
-    id phys = R.physics ? *R.physics : 0;
-    bool racing = phys && g_in_level;          // the Physics pointer is stale outside a level
-    r += ",\"physics\":" + (racing ? jp(phys) : std::string("null"));
-    if(racing){
+    id phys = cur_physics();                   // via the Manager (never the stale step pointer)
+    r += ",\"physics\":" + (phys ? jp(phys) : std::string("null"));
+    if(phys){
+        // game_time and mono are sampled together on the GL thread in this frame: use THEM for
+        // timer-rate checks (not host wall clock, which adds two adb round-trips of noise).
         r += ",\"game_time\":" + ivar_json(phys, "gameTime_");
+        r += ",\"bodies\":" + ji(count_bodies(cur_physics()));
         r += ",\"time_step\":" + ivar_json(phys, "timeStep_");
         r += ",\"step\":" + ivar_json(phys, "step_");
     }
     r += ",\"race_started\":" + std::string(g_race_started ? "true" : "false");
     r += ",\"step_calls\":" + ji(R.step_calls ? *R.step_calls : -1);
+    r += ",\"bike_gen\":" + ji(R.bike_gen ? *R.bike_gen : -1);
+    r += ",\"in_level\":" + std::string(g_in_level ? "true" : "false");
+    if(g_goto.active) r += ",\"goto\":{\"phase\":" + ji(g_goto.ph) + ",\"attempt\":" + ji(g_goto.attempt) + "}";
     return r + "}";
 }
 
@@ -467,8 +555,9 @@ static std::string cmd_goto(const JV& a, std::string& err){
     g_goto = GotoJob();
     g_goto.active = true; g_goto.w = w; g_goto.l = l;
     g_goto.n = a.has("n") ? (int)a.num("n", 0) : level_number(w, l);
-    g_goto.arg_kind = a.str("arg", "nsnumber");
-    g_goto.t0 = now_mono();
+    g_goto.max_attempts = (int)a.num("max_attempts", 3);
+    g_goto.want = std::to_string(w) + "_" + std::to_string(l);
+    g_goto.t0 = g_goto.ph_t = now_mono();
     char b[96]; snprintf(b, sizeof b, "{\"job\":\"goto_level\",\"n\":%d,\"scene\":", g_goto.n);
     return b + js(cname(running_scene())) + "}";
 }
@@ -503,7 +592,7 @@ void rv_bridge_frame(bool in_level){
         { std::lock_guard<std::mutex> lk(g_q_mu); j->done = true; }
     }
     if(!todo.empty()) g_q_cv.notify_all();
-    goto_tick();
+    goto_tick(in_level);
     track_race(in_level);
 }
 
@@ -585,6 +674,12 @@ static void* listen_thread(void*){
     for(;;){
         int c = accept(s, 0, 0);
         if(c < 0){ usleep(100000); continue; }
+        // Abstract sockets have no filesystem permissions: any local app could connect and use `call`
+        // (arbitrary method execution). Only accept root (0) and shell (2000, adbd's forward).
+        struct ucred cred; socklen_t cl = sizeof cred;
+        if(getsockopt(c, SOL_SOCKET, SO_PEERCRED, &cred, &cl) < 0 || (cred.uid != 0 && cred.uid != 2000)){
+            BERR("bridge: rejected peer uid=%d pid=%d", (int)cred.uid, (int)cred.pid); close(c); continue;
+        }
         pthread_t th; pthread_create(&th, 0, client_thread, (void*)(intptr_t)c); pthread_detach(th);
     }
     return 0;
