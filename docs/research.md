@@ -158,6 +158,14 @@ over-spine** model — "playable by construction," not by luck:
 
 ## Open questions (TODO research)
 
+- **Is the game frame-capped? (owner, 2026-10-08 — noted, not fixed.)** VERIFIED on Waydroid: the HUD run
+  timer (`Manager.time_`) adds exactly 1/60 s per rendered frame and physics steps once per frame, so at
+  ~61 fps the timer runs ~1.6–2% fast. If nothing caps the frame rate, a 90/120 Hz phone would run the
+  timer AND the physics 1.5–2× fast. Check: the cocos2d animation interval / swap interval the game sets,
+  and measure `run_time`/`mono` + `frame`/`mono` with the bridge on a high-refresh phone.
+- **Career map vs level files (VERIFIED 2026-10-08):** the map has 105 dots (worlds 30/30/30/15, global
+  number = (w−1)·30 + l), but worlds 2/3 ship more files (2_31…2_40, 3_31…3_45). What loads those?
+
 - **World structure (confirmed):** the MAIN world map = `WorldDefinition.plist`
   (plaintext: 12 `visuals` panels `WorldPanel1-12` + 3 `locks`). **Only worlds 1–4
   have level files** (`<w>_<l>.dat`: 30/40/45/15 = 130); **World 5 = the empty "?"

@@ -78,8 +78,8 @@ arrives before your wait starts. `regex` matches `"L TAG: message"`.
 | `state` | | scene + children, `lid`, `run_time` (HUD timer = `Manager.time_`), `mono` (GL-thread CLOCK_MONOTONIC, same frame), `frame`, `bodies`, `in_level`, `race_started`, `bike_gen`, goto phase |
 | `events_since` | `seq` | `{events, next, dropped}` |
 | `overlay` | `mode: hidden\|open\|toggle` | |
-| `goto_level` | `w, l [, max_attempts]` | starts a job; watch `goto_progress` → `goto_done` / `goto_retry` / `goto_failed` |
-| `find` | `class, depth, limit` | scene-graph nodes `{ptr, class, depth}` |
+| `goto_level` | `w, l [, n, max_attempts]` | starts a job; watch `goto_progress` → `goto_done` / `goto_retry` / `goto_failed`. Career-map number n = (w−1)·30 + l (map worlds are 30/30/30/15). Works from menus or from inside a level (backs out via the pause menu's Exit) |
+| `find` | `class, depth, limit [, ivars[]]` | scene-graph nodes `{ptr, class, depth}` (+ the named ivars per node) |
 | `children` | `ptr` | direct children |
 | `ivar` | `ptr, name` or `names[]` | values read BY NAME at runtime-realized offsets |
 | `call` | `target ("0x…" or "+Class"), sel, args[≤4], ret (v,i,f,B,@,s)` | arbitrary method call (dev only). Args: numbers, `"0x…"`, `{"f":1.5}`, `{"nsnumber":24}` |

@@ -21,7 +21,14 @@ LOG_RE='RVMOD|AndroidRuntime|FATAL EXCEPTION|F libc|F DEBUG'
 
 die() { echo "rv: $*" >&2; exit 1; }
 adbs() { timeout "${RV_TIMEOUT:-20}" adb -s "$RV_SERIAL" "$@"; }
-is_waydroid() { [[ "$RV_SERIAL" == 192.168.240.* ]] && command -v waydroid >/dev/null; }
+# Waydroid = ro.product.device waydroid_* (a FROZEN container hangs getprop -> short timeout, then fall back
+# to `waydroid status` reporting the serial's IP).
+is_waydroid() {
+  command -v waydroid >/dev/null || return 1
+  local dev; dev=$(RV_TIMEOUT=5 adbs shell getprop ro.product.device 2>/dev/null | tr -d '\r')
+  [ -n "$dev" ] && { [[ "$dev" == waydroid* ]]; return; }
+  waydroid status 2>/dev/null | grep -q "IP address:[[:space:]]*${RV_SERIAL%%:*}\$"
+}
 
 # Waydroid FREEZES the container when no Waydroid window is shown; every `adb shell` then
 # hangs. Fail fast with a hint instead of hanging.

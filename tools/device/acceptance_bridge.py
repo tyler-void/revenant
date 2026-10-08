@@ -57,8 +57,9 @@ async def main(out_dir):
     log, checks = [], {}
     params = StdioServerParameters(
         command="uv", args=["run", "--quiet", "--project", os.path.join(REPO, "mobile-modkit/mcp"), "modkit-mcp"],
-        env={**os.environ, "ADB_SERIAL": "192.168.240.112:5555", "PACKAGE": "com.miniclip.bikerivals",
-             "BRIDGE_PORT": "7777", "BRIDGE_SOCKET": "revenant"})
+        # defaults first, so the caller's environment (e.g. ADB_SERIAL for a phone) overrides them
+        env={"ADB_SERIAL": "192.168.240.112:5555", "PACKAGE": "com.miniclip.bikerivals",
+             "BRIDGE_PORT": "7777", "BRIDGE_SOCKET": "revenant", **os.environ})
     async with stdio_client(params) as (r, w), ClientSession(r, w) as session:
         await session.initialize()
         run = Run(session, log)

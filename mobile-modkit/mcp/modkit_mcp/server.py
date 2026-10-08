@@ -53,8 +53,23 @@ mcp = MCPServer(
 
 
 # ── plumbing ─────────────────────────────────────────────────────────────────────────────────
+_waydroid_cache: dict = {}
+
+
 def _is_waydroid() -> bool:
-    return bool(waydroid_bin()) and bool(SERIAL) and SERIAL.startswith("192.168.240.")
+    """Waydroid = `ro.product.device` starts with 'waydroid' (e.g. waydroid_x86_64). A FROZEN container
+    hangs `getprop`, so fall back to `waydroid status`'s IP matching the adb serial's host."""
+    if "v" in _waydroid_cache:
+        return _waydroid_cache["v"]
+    if not waydroid_bin():
+        _waydroid_cache["v"] = False
+        return False
+    r = adb.shell("getprop ro.product.device", timeout=5)
+    if r.ok and r.out.strip():
+        _waydroid_cache["v"] = r.out.strip().startswith("waydroid")
+        return _waydroid_cache["v"]
+    ip = waydroid_status().get("IP address", "")          # not cached: adb may just be down
+    return bool(ip) and bool(SERIAL) and SERIAL.split(":")[0] == ip
 
 
 def _system_server_pid() -> int | None:

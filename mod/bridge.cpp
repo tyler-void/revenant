@@ -323,8 +323,11 @@ static int count_bodies(id phys){
 //                                     withObject:[NSNumber numberWithInt:_levelNumber]]
 // Calling startLevelWithNumber: without a selected dot loads an EMPTY level (no level file read), so
 // the postcondition is checked: lid matches, the bike was created, and the Box2D world has bodies.
-// On failure: -[MotoXGame exitToMenu] and retry (max_attempts), then goto_failed.
-static const int WORLD_SIZES[] = {30, 40, 45, 15};
+// On failure: back out (-[PauseMenu btnExit], the pause menu's Exit button) and retry (max_attempts),
+// then goto_failed. (-[MotoXGame exitToMenu] was tried first: it does nothing from a crashed run.)
+// Career-map dots per world (VERIFIED live: 105 LevelDots, pack_ 0..3 = 30/30/30/15, numbered globally).
+// World 2/3 ship more level FILES (2_31..2_40, 3_31..3_45) than the map shows; those aren't reachable here.
+static const int WORLD_SIZES[] = {30, 30, 30, 15};
 enum GPhase { G_NAV, G_DETAIL, G_LOADING, G_VERIFY };
 struct GotoJob {
     bool active = false; int w = 0, l = 0, n = 0, attempt = 1, max_attempts = 3;
@@ -334,13 +337,16 @@ struct GotoJob {
     int bike_gen0 = 0, bodies0 = 0;
 };
 static GotoJob g_goto;
-static id g_game_obj = 0;                 // MotoXGame (self of levelLoaded:), for exitToMenu
-
-static int level_number(int w, int l){
-    int n = 0;
-    for(int i = 1; i < w && i <= 4; i++) n += WORLD_SIZES[i - 1];
-    return n + l;
+static id g_game_obj = 0;                 // MotoXGame (self of levelLoaded:)
+// Leave the current level the way the pause menu's Exit button does (VERIFIED: lands on the career map).
+static const char* back_out(){
+    id pm = find_class("PauseMenu", 8);
+    if(pm && responds(pm, "btnExit")){ ((void(*)(id,SEL))R.msgSend)(pm, sel("btnExit")); return "PauseMenu.btnExit"; }
+    if(g_game_obj){ ((void(*)(id,SEL))R.msgSend)(g_game_obj, sel("exitToMenu")); return "MotoXGame.exitToMenu"; }
+    return "none";
 }
+
+static int level_number(int w, int l){ return (w - 1) * 30 + l; }   // VERIFIED: 1_24=24, 2_5=35, 3_5=65, 4_5=95
 static void goto_phase(GPhase p){ g_goto.ph = p; g_goto.ph_t = now_mono(); }
 static id find_dot(int n){
     std::vector<NodeRef> all; walk(running_scene(), 0, 12, all, 4000);
@@ -357,7 +363,7 @@ static void goto_retry(const char* why){
         return;
     }
     rv_event("goto_retry", f);
-    if(g_goto.loaded && g_game_obj) ((void(*)(id,SEL))R.msgSend)(g_game_obj, sel("exitToMenu"));   // back out
+    if(g_goto.loaded) back_out();
     g_goto.attempt++; g_goto.asked_map = g_goto.selected = g_goto.raced = g_goto.loaded = false;
     g_goto.last_action = now_mono();
     goto_phase(G_NAV);
@@ -371,10 +377,9 @@ static void goto_tick(bool in_level){
     switch(g_goto.ph){
     case G_NAV: {
         if(in_level && !g_goto.raced){                          // in some other level: back out first
-            if(g_game_obj && t - g_goto.last_action > 2.0){
+            if(t - g_goto.last_action > 2.0){
                 g_goto.last_action = t;
-                ((void(*)(id,SEL))R.msgSend)(g_game_obj, sel("exitToMenu"));
-                rv_event("goto_progress", "\"step\":\"exitToMenu\"");
+                rv_event("goto_progress", ("\"step\":\"back_out\",\"via\":" + js(back_out())).c_str());
             }
             return;
         }
@@ -495,6 +500,7 @@ static std::string cmd_state(){
 static std::string cmd_find(const JV& a){
     std::string cls = a.str("class");
     int maxd = (int)a.num("depth", 10), lim = (int)a.num("limit", 50);
+    const JV* ivs = a.get("ivars");
     std::vector<NodeRef> all; walk(running_scene(), 0, maxd, all, 3000);
     std::string r = "{\"nodes\":["; int k = 0;
     for(auto& n : all){
@@ -502,7 +508,10 @@ static std::string cmd_find(const JV& a){
         if(!cls.empty() && strcmp(c, cls.c_str())) continue;
         if(k >= lim) break;
         if(k++) r += ",";
-        r += "{\"ptr\":" + jp(n.o) + ",\"class\":" + js(c) + ",\"depth\":" + ji(n.depth) + "}";
+        r += "{\"ptr\":" + jp(n.o) + ",\"class\":" + js(c) + ",\"depth\":" + ji(n.depth);
+        if(ivs && ivs->t == JV::ARR)                       // optional: read these ivars on every match
+            for(auto& iv : ivs->a) if(iv.t == JV::STR) r += "," + js(iv.s.c_str()) + ":" + ivar_json(n.o, iv.s.c_str());
+        r += "}";
     }
     return r + "],\"scanned\":" + ji((long long)all.size()) + "}";
 }

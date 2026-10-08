@@ -72,7 +72,8 @@ if [ $INSTALL = 1 ]; then
   timeout 120 adb -s "$RV_SERIAL" install -r "$OUT" | tail -1
   timeout 15 adb -s "$RV_SERIAL" shell am force-stop $PKG     # install -r can leave the OLD libmod running
   if [ $LAUNCH = 1 ]; then
-    if command -v waydroid >/dev/null && [[ "$RV_SERIAL" == 192.168.240.* ]]; then waydroid app launch $PKG
+    DEV=$(timeout 8 adb -s "$RV_SERIAL" shell getprop ro.product.device 2>/dev/null | tr -d '\r')
+    if command -v waydroid >/dev/null && [[ "$DEV" == waydroid* ]]; then waydroid app launch $PKG
     else timeout 15 adb -s "$RV_SERIAL" shell monkey -p $PKG -c android.intent.category.LAUNCHER 1 >/dev/null; fi
   fi
 fi
