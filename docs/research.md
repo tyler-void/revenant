@@ -231,11 +231,14 @@ over-spine** model — "playable by construction," not by luck:
 
 ## Open questions (TODO research)
 
-- **A Facebook prompt kills the game (OBSERVED 2026-10-15, player-facing?):** after a long series of finished
-  levels, right after a level load, four `FacebookPopupLayout` scenes appeared, a WebView process started, the game
-  activity stopped and the game's `onStop` called `System.exit(0)` ("exited cleanly (0)"). If a player hits the same
-  prompt after N wins, the patched build "crashes". TODO: find what schedules `FacebookPopupLayout` and patch it out
-  (patches/manifest.json). The bot rig survives it (`Rig.revive`, counted as `app_restarts`).
+- ✅ **RESOLVED — the "sign in with Facebook to get the Pizza Bike" prompt kills the game (2026-10-15).**
+  OBSERVED: after a series of finished levels, right after a level load, four `FacebookPopupLayout` scenes
+  appeared, a WebView process started, the game activity stopped and the game's `onStop` called
+  `System.exit(0)`; the owner also saw it lag long runs. VERIFIED (static): `verifyAndSuggestFacebookPopup`
+  (IMP `0x541768`, types `B8@0:4`) bumps a stored counter and, unless a flag is set, builds the popup when the
+  count is 5 or a multiple of 10. Fix = return NO (`mov r0,#0; bx lr`): `patches/manifest.json` (group
+  `privacy`, expect bytes checked against the clean APK — 15/15 match) and the dev libmod (logs
+  `facebook popup: disabled`). The bot rig still survives game exits (`Rig.revive`).
 
 - **`categoryBits "0000"` statics (377 of 2057 static ground objects, 334 untextured):** in plain Box2D a
   category of 0 collides with nothing, so these would be inert helpers — unless the game substitutes a

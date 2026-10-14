@@ -50,6 +50,7 @@ extern "C" {
 #define OFF_PROCCOND 0x50e104  // -[ConditionManager processConditionInfo:Achievements:] (info=r2, achs=r3 BOOL)
 #define OFF_CLICKSTATS 0x5a3db0 // -[? clickStats:] — Stats button handler (online; fails offline)
 #define OFF_LVLLOADED   0x6df2fc // -[MotoXGame levelLoaded:(id)]   — once per level load (bridge events)
+#define OFF_FBPOPUP     0x541768 // -[… verifyAndSuggestFacebookPopup] (BOOL) — the Pizza Bike Facebook prompt
 #define OFF_LVLFINISHED 0x6e01ec // -[MotoXGame levelFinished:(id)] — once per finish (bridge events)
 #define OFF_LSM_READY   0x567868 // -[LevelSelectionMenu didFinishLoading] — fires right after a level loads
 #define OFF_LAYER_ENTER 0x48bc54 // -[CCLayer onEnterTransitionDidFinish] — a menu/layer finished entering
@@ -809,6 +810,16 @@ static void install_hooks(){
     orig_clickstats=(void(*)(id,SEL,id))inline_hook((void*)(g_base+OFF_CLICKSTATS),(void*)hook_clickstats);
     LOGI("achievements hook armed (proccond=%p clickstats=%p)", (void*)orig_proccond, (void*)orig_clickstats);
 
+    // The "sign in with Facebook to get the Pizza Bike" prompt pops on the 5th and every 10th call of
+    // -[… verifyAndSuggestFacebookPopup]; offline it opens a WebView, the game stops and calls System.exit(0)
+    // (and it lags long bot runs). Same fix as patches/manifest.json (group privacy): return NO.
+    {
+        uint32_t* f=(uint32_t*)(g_base+OFF_FBPOPUP);
+        if(f[0]==0xe92d4bf0u && prot(f,8,PROT_READ|PROT_WRITE|PROT_EXEC)==0){
+            f[0]=0xe3a00000u; f[1]=0xe12fff1eu; flush(f,8);              // mov r0,#0; bx lr
+            LOGI("facebook popup: disabled");
+        } else LOGI("facebook popup: left alone (bytes %08x — already patched?)", f[0]);
+    }
     sel_kill=selReg("kill"); sel_dead=selReg("dead"); sel_exploded=selReg("exploded");
     LOGI("dismount: polling death state (kill/dead/exploded getters)");
 

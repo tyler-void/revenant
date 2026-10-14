@@ -40,6 +40,12 @@ One declarative file feeds BOTH the CLI (`build/apply_patches.py` reads `native`
   **VERIFIED end-to-end on the real `Bike+Rivals_1.5.2_APKPure.apk`**: 14/14 native patches
   matched + applied, 957 entries signed, `jarsigner -verify` exit 0 (`web/sign-test.ts` +
   `web/full-test.ts` are the dev harnesses; run with `bun run sign-test.ts`).
+- ➕ **2026-10-15: 15th native patch `verifyAndSuggestFacebookPopup` → NO** (group `privacy`): removes the
+  "sign in with Facebook to get the Pizza Bike" prompt, which offline opens a WebView and makes the game exit.
+  Its `expect` bytes match the clean APK. VERIFIED: the browser patcher pipeline (`patchApk`, groups
+  unlock+fuel+nitro+privacy, on the real APK) → applied=15 skipped=0 failed=0, output bytes at 0x541768 =
+  `0000a0e31eff2fe1`; device-verified in the libmod dev build (`facebook popup: disabled`). Not yet: a
+  browser-built APK installed on a device with this patch.
 - ✅ **TILT fix DONE — full DEX code-item rewrite in Rust→WASM (no apktool), device-verified.**
   The minimal same-size byte-patch (NOP the `register()` `isEnabled` gate + neuter `unregister()`)
   CRASHES: with the sensor force-registered, the game's `onSensorChanged(SensorEvent)` forwards to

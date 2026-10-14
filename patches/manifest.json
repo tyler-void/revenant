@@ -24,7 +24,8 @@
       { "name": "consumeBars:.no-spend",      "off": "0x6ab4e4", "expect": "7a00001a",         "patch": "7a0000ea",         "group": "fuel",   "desc": "Fuel: consumeBars: never spends (bne->b)" },
       { "name": "gasBarsLeft->Total",         "off": "0x6b4e24", "expect": "14109fe5",         "patch": "100000ea",         "group": "fuel",   "desc": "Fuel gauge always reads full" },
       { "name": "consumableCount:.=99",       "off": "0x6b1cf0", "expect": "010052e30300001a", "patch": "6300a0e31eff2fe1", "group": "nitro",  "desc": "Nitro/helmets count always 99" },
-      { "name": "useConsumable:.no-spend",    "off": "0x6b1dc0", "expect": "0010a0e10000a0e3", "patch": "0100a0e31eff2fe1", "group": "nitro",  "desc": "Nitro/helmets never spend" }
+      { "name": "useConsumable:.no-spend",    "off": "0x6b1dc0", "expect": "0010a0e10000a0e3", "patch": "0100a0e31eff2fe1", "group": "nitro",  "desc": "Nitro/helmets never spend" },
+      { "name": "verifyAndSuggestFacebookPopup", "off": "0x541768", "expect": "f04b2de97c029fe5", "patch": "0000a0e31eff2fe1", "group": "privacy", "desc": "No 'sign in with Facebook to get the Pizza Bike' prompt (pops on the 5th and every 10th call; offline it opens a WebView, the game stops and calls System.exit(0))" }
     ]
   },
 
