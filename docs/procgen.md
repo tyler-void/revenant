@@ -172,6 +172,16 @@ finish rate stays a reported benchmark.
 
 **PID trap:** long sessions crash the 32-bit game at launch once the container PID passes 65535 (lesson.md).
 
+**Feature gate RESULT (2026-10-15, VERIFIED, all runs recorded):** 7 features × difficulty 0.2/0.5/0.8 × 2 seeds × 3
+runs = 126 bot runs, **every cell 3/3 finished** → `allowed` = all 7 features up to 0.8 (rollers, climb 11–22°,
+descent to −24°, kicker gaps, drops up to 43 units, barrels 1–3, see-saw).
+⚠ **See-saw caveat (found in the video):** the cloned "see-saw" (1_13 joint #12) is a MOTORIZED arm
+(`motor: True, speed −0.2 rad/s, maxTorque 800000`) — it never tips; the bike rides it as a launch ramp. Its
+cell also doesn't vary with difficulty (same level for all 6 cells). TODO: pick an UN-motorized plank (1_24 joint
+#58 is 61×3.9, free — rejected by the current selection filter; the first attempt still selected nothing, reverted)
+and re-gate. Next after that: the 20-seed `gen.py batch --verify 3`.
+
+
 ### G4 generator v2 — `tools/levelgen/gen.py`
 - Beat plan + difficulty budget (rhythm groups: a hard beat is followed by a rest), only features in
   `features.json["allowed"]`, each capped at its verified difficulty.

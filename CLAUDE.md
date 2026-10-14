@@ -43,8 +43,11 @@ Android + offline — a great "just play" experience. Legal model stays BYO-orig
 **PRIORITY NOW (owner 2026-10-08): the GENERATOR TRACK G1–G4** (corpus stats + bridge traces → terrain
 encoding experiment → in-game bot verifier → `tools/levelgen/` generator v2); the level editor stays as is.
 Commit locally per step, report after each, don't push. Record: [docs/procgen.md](docs/procgen.md).
-State 2026-10-09: G1 ✅ (3d99a0b) · G2 ✅ spline per ground run (e3214f2) · G3 bot WIP (v0 3/30 W1; v1 ceiling
-brake + slices + plan overrides; next: W1 rerun + `--search`) · G4 `tools/levelgen/gen.py` written, not run.
+State 2026-10-15: G1 ✅ (3d99a0b) · G2 ✅ spline per ground run (e3214f2) · G3 ✅ gate changed by the owner to the
+generator's own features: 21 cells × 2 seeds × 3 runs all finished (`gen.py features`); W1 stays a benchmark ·
+G4 `gen.py` runs offline (40 seeds clean); NEXT: un-motorized see-saw (the clone is a motorized arm), then the
+20-seed `batch --verify 3`. Pizza-bike Facebook prompt patched out (2fd9e61). Waydroid: start it with
+`setsid -f waydroid session start` so it survives agent sessions.
 
 **ACTIVE — full speed (in order): Phase 7 then Phase 8.** (Owner 2026-06-14: move on to 7+8;
 the rest are WIP.)
