@@ -809,7 +809,10 @@ struct BotParams {
     float kp = 2.0f, kd = 0.3f, air_kp = 1.5f, air_kd = 0.4f;
     float takeoff_lean = 0.4f, takeoff_s = 0.12f, flip_cut = 0.9f;
     float stuck_s = 6.0f, max_s = 150.0f, gravity = 68.0f, ride_h = 4.0f, throttle = 1.0f;
-    float head = 12.0f, ceil_s = 2.0f, ceil_brake = 1.0f;     // ceiling look-ahead (rider head above wheel mid)
+    float head = 12.0f, ceil_s = 2.0f, ceil_brake = 1.0f, ceil_vmin = 20.0f, wheel_r = 1.6f;
+    float db = 0.2f, air_db = 0.12f;                          // lean deadbands (rad): neutral inside, no bobbing
+    float air_alpha = 21.9f, air_hold = 0.25f, air_T = 1.0f, land_bias = 0.05f, u_min = 0.08f;   // air: one held lean per window
+    float look = 220.0f, energy_k = 0.7f;                     // terrain-following launch look-ahead     // ceiling look-ahead (rider head above wheel mid)
 };
 struct BotSeg { float x0, x1, thr, brk, lean; };               // plan override: thr/brk < 0 = keep the policy's
 struct BotState {
@@ -823,6 +826,7 @@ struct BotState {
     std::vector<std::vector<float>> slices;                               // per x: [bottom, top, bottom, top, …]
     std::vector<BotSeg> plan;
     int ceil_frames = 0; bool dbg_ceil = false;
+    float air_next = 0, air_u = 0; int air_decisions = 0;
     int bike_gen = -1, frames = 0;
 };
 static BotState g_bot;
@@ -972,9 +976,9 @@ static std::string cmd_trace_stop(const JV& a){
 //             likely sets that body's transform itself; the wheel axis is pure geometry), rate = filtered
 //             finite difference per physics step:
 //             lean = kp*(pitch - slope) + kd*pitch_rate   (lean +1 = forward / clockwise);
-//   takeoff:  lean back (-takeoff_lean) for takeoff_s after the wheels leave the ground;
-//   airborne: PD toward the slope at the predicted landing point (ballistic, `gravity`, over the optional
-//             host profile px/py), else toward the last ground slope.
+//   airborne: ONE held lean per air_hold window (decided at takeoff, then every air_hold s), sized from the
+//             measured rotation model to land the pitch on the slope at the predicted landing point (ballistic,
+//             `gravity`, over the host slices / profile), else on the last ground slope. Neutral if |u| < u_min.
 //   ceiling:  with host `slices` (static solid occupancy), while grounded predict the launch parabola from
 //             the current velocity; if the rider's head would enter solid from BELOW while rising -> brake;
 //   plan:     host overrides by torso x [[x0, x1, thr, brk, lean_bias], …] (thr/brk < 0 = keep) — for search.
@@ -1016,6 +1020,62 @@ static bool surface_near(float x, float y, float* top){       // the solid top c
     *top = best;
     return best < 1e29f;
 }
+// Lean law: NEUTRAL inside the deadband (constant correction wastes momentum and makes the bike bob);
+// outside it, push toward the target, damped by the pitch rate. + = forward (clockwise).
+static float lean_law(float err, float rate, float kp, float kd, float db){
+    float e = fabsf(err) - db;
+    if(e <= 0) return 0;
+    return kp * (err > 0 ? e : -e) + kd * rate;
+}
+// Ceiling risk of a flight launched from (x, y = wheel centre) with velocity (vx, vy) at pitch `ang`:
+// true if the rider's head enters static solid from BELOW before the wheels touch anything.
+// `need_flight`: require the first 3 frames to clear the ground (else the bike just follows the terrain).
+static bool flight_hits_ceiling(float x, float y, float vx, float vy, float ang, bool need_flight){
+    const BotParams& P = g_bot.p;
+    float hx = -sinf(ang) * P.head, hy = cosf(ang) * P.head;
+    for(int k = 1; k <= (int)(P.ceil_s * 60); k++){
+        float t = k / 60.0f, xx = x + vx * t, yy = y + vy * t - 0.5f * P.gravity * t * t;
+        if(solid_kind(xx, yy - P.wheel_r, nullptr) != 0) return false;          // wheels on the ground
+        if(need_flight && k <= 3) continue;
+        if(solid_kind(xx + hx, yy + hy, nullptr) == 1) return true;
+    }
+    return false;
+}
+// A real takeoff from contact point (x, y_contact): 0.1 s later the ground is more than 1 unit below the
+// predicted contact point (flat ground or a concave ramp keeps the wheels down -> false).
+static bool flies_from(float x, float y_contact, float vx, float vy){
+    const BotParams& P = g_bot.p;
+    float t = 0.1f;
+    return solid_kind(x + vx * t, y_contact + vy * t - 0.5f * P.gravity * t * t - 1.0f, nullptr) == 0;
+}
+// Use the map: walk the ground surface ahead of the wheels (2-unit steps, speed from energy), find where
+// the bike would really take off (launching there with the tangent velocity clears the ground), and check
+// THAT flight for a ceiling. Also checks launching right now. Returns true -> brake.
+static bool ceiling_ahead(float mx, float my, float vx, float vy, float pitch){
+    const BotParams& P = g_bot.p;
+    float v0 = sqrtf(vx * vx + vy * vy);
+    if(v0 < P.ceil_vmin) return false;
+    if(solid_kind(mx - sinf(pitch) * P.head, my + cosf(pitch) * P.head, nullptr) != 0) return false;  // already "inside": not colliding
+    if(flight_hits_ceiling(mx, my, vx, vy, pitch, true)) return true;
+    float y0;
+    if(!surface_near(mx, my - P.wheel_r - 1.0f, &y0)) return false;
+    if(vx <= 0) return false;                                     // the walk only looks rightward (the race direction)
+    float x = mx, y = y0;
+    for(float d = 2.0f; d <= P.look; d += 2.0f){
+        float x1 = mx + d, y1;
+        if(!surface_near(x1, y, &y1)) break;
+        if(y1 > y + 6.0f) break;                                  // a wall ahead: no launch along here
+        bool drop = y1 < y - 6.0f;                                // a drop-off: launch level from the edge
+        float ang = atan2f(drop ? 0.0f : y1 - y, 2.0f);
+        float v2 = v0 * v0 - 2.0f * P.energy_k * P.gravity * (y - y0);
+        if(v2 <= 4.0f) break;                                     // wouldn't get here
+        float v = sqrtf(v2), lvx = v * cosf(ang), lvy = v * sinf(ang);
+        if(drop || flies_from(x, y, lvx, lvy))                    // a drop-off or a lip: the takeoff
+            return flight_hits_ceiling(x, y + P.wheel_r + 0.05f, lvx, lvy, ang, false);
+        x = x1; y = y1;
+    }
+    return false;
+}
 static bool bike_dead(id bike){
     const char* sels[] = {"kill", "dead", "exploded"};
     for(const char* s : sels) if(responds(bike, s) && (((int(*)(id,SEL))R.msgSend)(bike, sel(s)) & 0xff)) return true;
@@ -1026,9 +1086,9 @@ static void bot_end(const char* result, float rt, float x){
     g_bot.active = false;
     g_input.thr = g_input.brk = g_input.lean = 0; g_input.release_at = 0; g_input.dirty = true;
     char f[320];
-    snprintf(f, sizeof f, "\"result\":\"%s\",\"lid\":%s,\"run_time\":%s,\"x\":%s,\"start_x\":%s,\"progress\":%s,\"frames\":%d,\"ceil_frames\":%d,\"max_air_s\":%s",
+    snprintf(f, sizeof f, "\"result\":\"%s\",\"lid\":%s,\"run_time\":%s,\"x\":%s,\"start_x\":%s,\"progress\":%s,\"frames\":%d,\"ceil_frames\":%d,\"air_decisions\":%d,\"max_air_s\":%s",
              result, js(cur_lid().c_str()).c_str(), jf(rt).c_str(), jf(x).c_str(), jf(g_bot.start_x).c_str(),
-             jf(x - g_bot.start_x).c_str(), g_bot.frames, g_bot.ceil_frames, jf(g_bot.max_air).c_str());
+             jf(x - g_bot.start_x).c_str(), g_bot.frames, g_bot.ceil_frames, g_bot.air_decisions, jf(g_bot.max_air).c_str());
     rv_event("bot_result", f);
 }
 static void bot_on_finish(float rt){
@@ -1078,27 +1138,17 @@ static void bot_tick(){
         float slope = bv.gt ? atan2f(((float*)bv.gt)[1], ((float*)bv.gt)[0]) : 0.0f;
         B.tgt_last = slope;
         float err = wrap_pi(pitch - slope);
-        lean = B.p.kp * err + B.p.kd * rate;
+        lean = lean_law(err, rate, B.p.kp, B.p.kd, B.p.db);
         if(err > B.p.flip_cut) thr = 0;                                       // about to loop out
         if(!B.was_ground) B.max_air = std::max(B.max_air, rt - B.air_t0);
-        // ceiling look-ahead: launch NOW with the current velocity and follow the whole predicted flight until
-        // the wheels would land — if the rider's head (head units along the bike's up axis) enters static solid
-        // from BELOW on the way, brake (quarter-pipes under overhangs, tunnel mouths with sloping roofs).
-        B.dbg_ceil = false;
-        if(!B.slices.empty()){
-            float vx = 0.5f * (BW[17] + FW[17]), vy = 0.5f * (BW[18] + FW[18]);
-            float mx = 0.5f * (BW[3] + FW[3]), my = 0.5f * (BW[4] + FW[4]);
-            float hx = -sinf(pitch) * B.p.head, hy = cosf(pitch) * B.p.head;
-            for(int k = 2; k <= (int)(B.p.ceil_s * 60); k += 2){
-                float t = k / 60.0f, xx = mx + vx * t, yy = my + vy * t - 0.5f * B.p.gravity * t * t;
-                if(solid_kind(xx + hx, yy + hy, nullptr) == 1){ B.dbg_ceil = true; break; }
-                if(k > 6 && solid_kind(xx, yy - B.p.ride_h, nullptr) == 2) break;   // wheels back on the ground
-            }
-            if(B.dbg_ceil){ thr = 0; brk = B.p.ceil_brake; B.ceil_frames++; }
-        }
+        // ceiling look-ahead over the mapped terrain (ceiling_ahead): brake if the coming takeoff's flight would put
+        // the rider's head into static solid from below (quarter-pipes under overhangs, tunnel mouths).
+        B.dbg_ceil = !B.slices.empty() &&
+            ceiling_ahead(0.5f * (BW[3] + FW[3]), 0.5f * (BW[4] + FW[4]), 0.5f * (BW[17] + FW[17]), 0.5f * (BW[18] + FW[18]), pitch);
+        if(B.dbg_ceil){ thr = 0; brk = B.p.ceil_brake; B.ceil_frames++; }
     } else {
-        if(B.was_ground){ B.takeoff_until = rt + B.p.takeoff_s; B.air_t0 = rt; }
-        float tgt = B.tgt_last;
+        if(B.was_ground){ B.air_t0 = rt; B.air_next = rt; B.air_u = 0; }   // takeoff: decide right away
+        float tgt = B.tgt_last, t_land = -1;
         // wheels are real dynamic bodies (motoCenter_'s motion state is suspect, see above)
         float vx = 0.5f * (BW[17] + FW[17]), vy = 0.5f * (BW[18] + FW[18]);
         float mx = 0.5f * (BW[3] + FW[3]), my = 0.5f * (BW[4] + FW[4]), gy;
@@ -1110,7 +1160,7 @@ static void bot_tick(){
                 if(vy - B.p.gravity * t < 0 && solid_kind(xx, yy - B.p.ride_h, &top) == 2){
                     float y0, y1;
                     if(surface_near(xx - 3, top, &y0) && surface_near(xx + 3, top, &y1)) tgt = atan2f(y1 - y0, 6.0f);
-                    B.dbg_land_x = xx;
+                    B.dbg_land_x = xx; t_land = t;
                     break;
                 }
                 continue;
@@ -1118,14 +1168,27 @@ static void bot_tick(){
             if(profile_y(xx, &gy) && yy - gy < B.p.ride_h){
                 float y0, y1;
                 if(profile_y(xx - 3, &y0) && profile_y(xx + 3, &y1)) tgt = atan2f(y1 - y0, 6.0f);
-                B.dbg_land_x = xx;
+                B.dbg_land_x = xx; t_land = t;
                 break;
             }
         }
         B.dbg_target = tgt;
-        float err = wrap_pi(pitch - tgt);
-        lean = B.p.air_kp * err + B.p.air_kd * rate;
-        if(rt < B.takeoff_until && err < B.p.flip_cut) lean = -B.p.takeoff_lean;
+        // Air: ONE held action per decision window (no per-frame correction — that jiggles the bike). At takeoff
+        // and every air_hold s (0.25: a full lean turns the bike ~2.7 rad in 0.5 s, so longer open-loop holds
+        // overshoot): predict the pitch at landing from the pitch + spin, and pick the single lean u that,
+        // held for h = min(air_hold, T), lands it on the slope. Model (VERIFIED from 9.8k airborne samples):
+        // angular accel = -air_alpha * lean (lean +1 = nose down), so p_land = p + w*T - alpha*u*(h*T - h*h/2).
+        if(rt >= B.air_next){
+            float T = t_land > 0 ? t_land : B.p.air_T;            // no landing found (e.g. onto a dynamic body)
+            float h = std::min(B.p.air_hold, T);
+            float denom = B.p.air_alpha * (h * T - 0.5f * h * h);
+            float e = wrap_pi(pitch + rate * T - (tgt + B.p.land_bias));
+            float u = denom > 1e-3f ? e / denom : 0.0f;
+            B.air_u = fabsf(u) < B.p.u_min ? 0.0f : clampf(u, -1, 1);
+            B.air_next = rt + h;
+            B.air_decisions++;
+        }
+        lean = B.air_u;
     }
     for(const BotSeg& sg : B.plan) if(x >= sg.x0 && x < sg.x1){
         if(sg.thr >= 0) thr = sg.thr;
@@ -1147,7 +1210,7 @@ static std::string cmd_bot_start(const JV& a, std::string& err){
     const JV* P = a.get("params"); const JV& pp = P ? *P : a;
     #define BP(n) B.p.n = (float)pp.num(#n, B.p.n)
     BP(kp); BP(kd); BP(air_kp); BP(air_kd); BP(takeoff_lean); BP(takeoff_s); BP(flip_cut);
-    BP(stuck_s); BP(max_s); BP(gravity); BP(ride_h); BP(throttle); BP(head); BP(ceil_s); BP(ceil_brake);
+    BP(stuck_s); BP(max_s); BP(gravity); BP(ride_h); BP(throttle); BP(head); BP(ceil_s); BP(ceil_brake); BP(ceil_vmin); BP(wheel_r); BP(db); BP(air_db); BP(look); BP(energy_k); BP(air_alpha); BP(air_hold); BP(air_T); BP(land_bias); BP(u_min);
     #undef BP
     const JV* X = a.get("px"); const JV* Y = a.get("py");
     if(X && Y && X->t == JV::ARR && Y->t == JV::ARR && X->a.size() == Y->a.size()){

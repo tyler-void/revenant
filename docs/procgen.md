@@ -143,38 +143,51 @@ throttle for one run each under the in-game trace (Waydroid). All numbers VERIFI
 - ⚠ **Side effect:** test rides in a career slot write that slot's best time (and probably medals) into
   the player's save (1_24 now shows BEST 9.30). Use a slot whose record doesn't matter, or accept it.
 
-### G3 in-game bot — STATUS 2026-10-09 (WIP, not accepted yet)
+### G3 in-game bot — 2026-10-15
 Bridge `bot_start{params, px/py, slices, plan}` / `bot_stop` → event `bot_result{result, run_time, x, progress,
-ceil_frames, max_air_s}`; runs per frame on the GL thread through the `input` path. Host: `tools/levelgen/bot_eval.py`
-(`--levels 1_1-1_30 [--record] [--trace] [--params json]`). Every recorded run saves
-`~/.cache/revenant/bot/runs/<lid>/<stamp>.json` (params, plan, result, per-step actions + state) + `.mp4` (local only).
-- **Pitch source (VERIFIED):** `motoCenter_`'s angle and angVel disagree (cosine 0.04 between d(angle)/dt and
-  angVel) → the bot uses the wheel-axis angle atan2(front − back) with a filtered finite-difference rate.
-  The torso body is consistent (cosine 0.80–0.89).
-- **v0 baseline (PD to the game's ground tangent, takeoff lean, air PD to the predicted landing slope):
-  3/30 W1 levels finished (1_1, 1_4, 1_25), all 2★, bot time / gold median 1.03.** Deaths: water gaps
-  undershot (1_3, 1_12), quarter-pipe launches into overhangs (1_24), tunnel mouths, steep walls (>70°), flips.
-- **v1 (installed, partly tested):** host sends `slices` = static solid occupancy per x (`slices_of`, even-odd per
-  polygon then union); while grounded the bot predicts the launch parabola from its velocity and BRAKES if the
-  rider's head would enter solid from below (full flight, head along the bike's up axis); landing prediction
-  uses the slices (correct under overhangs). 1_24: progress 406 → 2066 of ~2430 (the overhang is passed).
-- **Determinism (VERIFIED, 2 runs):** identical bot runs on 1_24 ended at the same run_time 24.2331352 and
-  x 1980.11255 → a bot verdict is reproducible.
-- **Next:** (1) rerun W1 with the latest build (full-flight ceiling scan — untested); (2) `--search K` in
-  bot_eval: on death, read the trace (takeoff x, airborne?, pitch error) and try targeted `plan` overrides
-  (coast/brake before the takeoff, full throttle, lean bias), keep the best progress; (3) then G4.
-- ⚠ Every finished run writes the slot's best time/medals into the save (bot runs on stock W1 levels did).
-- Idea (owner, 2026-10-09): train a model (RL) — the pieces exist (deterministic physics, per-step trace
-  observations, input actions, reward = progress/finish/time, recorded runs as a dataset). Bottleneck:
-  real-time 60 Hz + ~8 s goto resets → needs an in-level restart (`HudLayer restart`, `PauseMenu btnRestart`
-  exist), fast-forward, maybe several Waydroid instances.
+ceil_frames, air_decisions, max_air_s}`; runs per frame on the GL thread through the `input` path. Host:
+`tools/levelgen/bot_eval.py --levels … [--record] [--search K] [--replay]`. Every recorded run saves
+`~/.cache/revenant/bot/runs/<lid>/<stamp>.json` (params, plan, result, per-step actions + state) + `.mp4` (local).
 
-### G4 generator v2 — `tools/levelgen/gen.py` (WRITTEN, NOT RUN YET)
-Beat plan + budget, one spline per ground run, gaps sized as a fraction of the predicted ballistic range
-(V_LIP 110, g 68), landing runs descend along the trajectory (no rider-facing walls), see-saw cloned via
-`levelops.js` (`levelops_cli.js` + `lgcore.levelops`; select the JOINT explicitly — `carrySet` drops joints
-bound to the world), bare `ExplosiveBarrel`/`Nitro` prefabs at the corpus heights (11.1 / 12.75 above ground),
-`--verify N` / `--play` / `batch`. Needs: an offline dry run, device verify, the 20-seed batch.
+**Policy (v1.x):**
+- pitch = the wheel-axis angle (motoCenter_'s angle/angVel disagree — cosine 0.04), rate = filtered finite difference;
+- ground: lean toward the game's ground tangent ONLY outside a 0.2 rad deadband (neutral otherwise — owner: constant
+  correction makes the bike bob and bleeds momentum); throttle cut when the nose is > 0.9 rad above the slope;
+- ceiling: the host sends `slices` (static solid occupancy per x); the bot walks the mapped surface ahead to the real
+  takeoff (energy-adjusted speed), checks that flight for the rider's head entering solid from below, and brakes;
+- air: ONE held lean per 0.25 s window (owner: per-frame corrections jiggle the bike), sized from the measured
+  rotation model (−21.9 rad/s² per unit lean) to land the pitch on the predicted landing slope;
+- plan: host overrides by torso x `[x0, x1, thr, brk, lean_bias]`; `--search K` tries targeted overrides around each
+  failure (coast/brake before the takeoff, full gas, lean bias) and keeps what gets further.
+
+**Results:** v0 (PD) finished 3/30 W1 levels (all 2★, time ≈ gold). v1.x variants finish 1_1/1_4/1_25 on good runs but
+the game is NOT run-to-run deterministic under bot input (1_1: finish vs death on consecutive identical runs), and each
+controller tweak rescued one stock level and lost another — stock W1 levels are puzzles (boats, water gaps, overhangs).
+
+**DECISION (owner, 2026-10-15): the bot's gate is the generator's own vocabulary, not stock W1.** `gen.py features`
+rides every feature alone (flat start → feature → flat finish) at difficulty 0.2/0.5/0.8, 2 seeds each, 3 runs per
+level; a (feature, difficulty) cell passes only if every run finishes. `features.json` → `allowed`
+{feature: highest passing difficulty}; the generator uses only those features, capped at those difficulties. The W1
+finish rate stays a reported benchmark.
+
+**PID trap:** long sessions crash the 32-bit game at launch once the container PID passes 65535 (lesson.md).
+
+### G4 generator v2 — `tools/levelgen/gen.py`
+- Beat plan + difficulty budget (rhythm groups: a hard beat is followed by a rest), only features in
+  `features.json["allowed"]`, each capped at its verified difficulty.
+- Terrain = one spline per ground run (G2); climbs ≤ 30°, descents ≤ 32° (inside the corpus ride-slope p90).
+- Kicker gaps: the ramp angle θ is USED (old RAMP_SLOPE bug); width = a difficulty-scaled fraction of the predicted
+  ballistic range (V_LIP 110, g 68); the landing run starts BELOW the lip and descends along the trajectory.
+  `terrain_checks` asserts on every level: no overlapping runs, no run starting above the previous run's end (the
+  old snap-back walls), every kicker has θ. 40 seeds offline: 0 issues.
+- See-saw: cloned from a world-1 level via `levelops.js` (`levelops_cli.js`; the JOINT must be selected explicitly —
+  `carrySet` drops joints bound to the world), rested tipped toward the rider (rotated about the pivot), with an
+  approach ramp to the plank's top surface (the corpus see-saws are ~14-unit-thick arms hung over pits) and a new
+  ground run underneath so it can tip.
+- Bare prefabs: `ExplosiveBarrel` / `Nitro` at the corpus heights (11.1 / 12.75 above ground).
+- `gen --seed --difficulty --slot 1_24 [--verify N] [--play] [--record]`: `--verify N` = up to N bot runs, one finish
+  proves it beatable; medal times = fastest bot time × calibration (stock gold / bot time) × (1.33, 1.12, 1).
+  `batch --seeds 1-20 --verify 3` reports pass rate, times and failures by beat.
 
 ## 2. Web / roguelike research (synthesized, with sources)
 

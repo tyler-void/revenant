@@ -98,8 +98,34 @@ class Rig:
     def remove_level(self, lid):
         self.adb.shell(f"rm -f {MODS}/{lid}.dat", timeout=10)
 
-    def load(self, lid, timeout=60):
-        """goto_level -> {ok, goto, level_loaded, mod_line, crashes}. ok = goto_done for this lid."""
+    app_restarts = 0
+
+    def alive(self):
+        try:
+            return bool(self.bridge.call("ping", timeout=3).get("ok"))
+        except BridgeError:
+            return False
+
+    def revive(self):
+        """The game exited (e.g. a Facebook prompt opened a WebView -> the game's onStop calls System.exit(0)):
+        relaunch it and wait for the bridge. Counted in app_restarts."""
+        Rig.app_restarts += 1
+        self.ensure_game()
+
+    def load(self, lid, timeout=60, _retry=True):
+        """goto_level -> {ok, goto, level_loaded, mod_line, crashes}. ok = goto_done for this lid. If the game
+        has exited, relaunch it and retry once."""
+        if not self.alive():
+            self.revive()
+        try:
+            return self._load(lid, timeout)
+        except (BridgeError, RuntimeError):
+            if not _retry:
+                raise
+            self.revive()
+            return self.load(lid, timeout, _retry=False)
+
+    def _load(self, lid, timeout=60):
         w, l = (int(x) for x in lid.split("_"))
         cursor = self.log_cursor()
         self.events()

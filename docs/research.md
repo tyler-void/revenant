@@ -219,7 +219,23 @@ over-spine** model — "playable by construction," not by luck:
   struct return; the bridge `call` doesn't support stret yet).
 - Full-throttle on 1_24: top chassis speed 128 units/s in 4.45 s; the corpus gold pace median is 70 units/s.
 
+## Bot control facts (G3, 2026-10-15)
+
+- **Airborne rotation model (VERIFIED, 9,814 airborne samples across bot runs):** angular acceleration of the
+  bike frame (wheel-axis pitch) ≈ **−21.9 × lean rad/s²** (+1 = nose down). Binned medians: lean ≤ −0.5 →
+  +15.2, ~0 → +0.6, ≥ +0.5 → −18.9 rad/s².
+- **Run-to-run nondeterminism (OBSERVED):** identical bot runs can diverge (1_1: finish 26.67 s vs death at
+  x 1401). Suspect: something in the input → physics path uses the real frame time (tilt smoothing?) —
+  unverified. The `MotionManager` ivars weren't inspected (the class map lived in a wiped /tmp).
+- **The 32-bit game needs PID ≤ 65535** (bionic pthread_mutex_t limit) — see lesson.md.
+
 ## Open questions (TODO research)
+
+- **A Facebook prompt kills the game (OBSERVED 2026-10-15, player-facing?):** after a long series of finished
+  levels, right after a level load, four `FacebookPopupLayout` scenes appeared, a WebView process started, the game
+  activity stopped and the game's `onStop` called `System.exit(0)` ("exited cleanly (0)"). If a player hits the same
+  prompt after N wins, the patched build "crashes". TODO: find what schedules `FacebookPopupLayout` and patch it out
+  (patches/manifest.json). The bot rig survives it (`Rig.revive`, counted as `app_restarts`).
 
 - **`categoryBits "0000"` statics (377 of 2057 static ground objects, 334 untextured):** in plain Box2D a
   category of 0 collides with nothing, so these would be inert helpers — unless the game substitutes a

@@ -131,3 +131,9 @@ frame, so the expected ratio is **fps/60** (Waydroid renders ~61 fps → ≈1.01
 - `install -r` does not always kill the old process → `app_stop` before `app_launch` (modloop.sh does).
 - The bridge accepts only uid 0/2000 peers (SO_PEERCRED): `call` executes arbitrary methods, and an abstract
   socket has no filesystem permissions.
+
+## Gotcha: PID budget (32-bit apps)
+32-bit bionic aborts a process whose PID > 65535. Waydroid uses the host `pid_max`, so a long session of
+`adb shell` calls eventually makes a 32-bit game die at launch (`Limited by the size of pthread_mutex_t`).
+`device_ensure` reports `last_pid` and a `warning` above 60000 → `waydroid session stop && waydroid session start`.
+

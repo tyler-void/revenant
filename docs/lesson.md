@@ -274,3 +274,31 @@
   response of the call that caused them, with the tombstone lines attached.
 - **Agent latency is seconds.** A 4 s `hold_ms` looked "13 s late" because the next interactive call went
   out after the agent's own thinking time. Time-sensitive checks belong in one script (or `hold_ms`).
+
+## In-game bot (G3, 2026-10-09 .. 10-15)
+
+- **A 32-bit app dies at launch once its PID passes 65535** — bionic aborts with `Limited by the size of
+  pthread_mutex_t, 32 bit bionic libc only accepts pid <= 65535`. Waydroid inherits the host's
+  `pid_max` (4194304), and every `adb shell`, `screenrecord` and relaunch burns PIDs inside the container,
+  so after a long session the game "crashes on start" for no visible reason. Fix: restart the Waydroid
+  session (`waydroid session stop && waydroid session start` — fresh PID namespace). `device_ensure` now
+  reports `last_pid` and warns above 60000.
+- **The game is NOT run-to-run deterministic under bot input.** Same build, same level, no plan: 1_1 finished
+  (26.67 s) and two minutes later died at x 1401. Two identical 1_24 runs happened once — luck, not a rule.
+  Never judge a controller change from one run per level; the bot's gate rides every cell 3 times.
+- **Per-frame lean corrections make the bike jiggle and bleed momentum** (owner, watching the videos). On the
+  ground: lean only outside a deadband (neutral 0% → 56% of frames, sign flips 8.3/s → 2.0/s on 1_1). In the
+  air: one held action per decision window, sized from the measured rotation model — not a PD at 60 Hz.
+- **A full lean is strong:** airborne angular acceleration ≈ −21.9 rad/s² per unit lean (9.8k samples), i.e.
+  ~2.7 rad in 0.5 s at full lean. Open-loop holds of 0.5–1 s overshoot; small held leans re-decided every
+  ~0.25 s work.
+- **Ceiling heuristics need the map, not just the current velocity.** "Launch now with the current velocity"
+  braked under arches the bike passes beneath and on ramps it simply follows (1_1 parked itself). Walk the
+  mapped surface ahead to the real takeoff point, then check THAT flight; skip geometry the rider is already
+  inside (it evidently doesn't collide).
+- **Don't gate the generator on beating hand-made levels** (owner decision 2026-10-15). Stock W1 levels are
+  puzzles (boats, water gaps, overhangs); the bot only has to beat what the generator emits. Gate = every
+  generator feature × difficulty, alone, ridden 3× (`gen.py features`); W1 stays a benchmark.
+- **The corpus see-saws are thick mechanical arms (~14 units)** hung over pits. On flat ground the low end is a
+  wall the bike pushes against — the generator builds an approach ramp to the plank's top.
+

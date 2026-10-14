@@ -170,6 +170,17 @@ def _device_ensure() -> dict:
     out["wm_size"] = props[2].replace("Physical size:", "").strip() if len(props) > 2 else ""
     _check_restart()
     out["system_server_pid"] = _state["system_server_pid"]
+    # 32-bit bionic aborts any process whose pid > 65535 ("Limited by the size of pthread_mutex_t"). Waydroid
+    # inherits the host's pid_max (4194304), so after enough adb shells / screenrecords a 32-bit game dies at
+    # launch. A fresh Waydroid session resets the container's PID namespace.
+    try:
+        last_pid = int(adb.shell("cat /proc/sys/kernel/ns_last_pid", timeout=5).out.strip() or 0)
+    except ValueError:
+        last_pid = 0
+    out["last_pid"] = last_pid
+    if last_pid > 60000:
+        out["warning"] = (f"pid counter at {last_pid}: 32-bit apps abort once their pid > 65535 — restart the "
+                          "Waydroid session (`waydroid session stop && waydroid session start`) to reset it")
     if PACKAGE:
         path = adb.shell(f"pm path {PACKAGE}", timeout=10).out.strip()
         out["installed"] = path.startswith("package:")
